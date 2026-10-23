@@ -6,6 +6,7 @@
 pub mod addr;
 pub mod color;
 pub mod date;
+pub mod locale;
 pub mod parse;
 pub mod value;
 
@@ -14,4 +15,5 @@ pub use addr::{
     split_sheet, unquote_sheet,
 };
 pub use date::DateSystem;
+pub use locale::Locale;
 pub use value::{Array, CellError, Value, compare, compare_numbers, compare_text, number_to_text, sort_compare};

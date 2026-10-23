@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (German: formulas, numbers and dates, default names, function help and a 1,580-label catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -40,7 +40,26 @@ right-to-left sheets and full complex-script support. Part of
 - **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
   separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
   localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open).
+  was PR #163 (closed unmerged). **German formula syntax (10-23):** with the German interface,
+  entry and display use Excel de-DE's error values (`#WERT!`, `#BEZUG!`, `#ZAHL!`, `#NV`,
+  `#ÜBERLAUF!`, `#DATEN_ABRUFEN`; `#NULL!`, `#DIV/0!`, `#NAME?`, `#CALC!` unchanged), `;` and
+  `,` separators, `{1,5.2;3.4}` arrays and `WAHR`/`FALSCH`, all observed in Excel de-DE. Typed
+  `#nv` is the error, English `#N/A` is text, as there. All 490 functions take their German
+  names (`SUMME`, `SVERWEIS`, `ZÄHLENWENNS`; 391 differ from English, read from Excel de-DE's
+  `Formula2Local`, `crates/formula/src/german.rs`), typed in any case. **Numbers, dates and
+  booleans (10-23)** are painted in de-DE (`gridcraft_core::Locale`, carried by the session on
+  every workbook, never saved): `1.234.567,89`, `15. Okt 26`, `Mrz`, `Donnerstag`, `WAHR`, the
+  region's built-ins (short date `15.10.2026`, currency `1.234,50 €`, accounting with `€`), in the
+  grid, print, chart axes and labels; typed `1.234,5`, `15.10.2026 13:30`, `15.10.`, `15. Okt 26`
+  and `wahr` enter as there (`1.5` is the 1st of May, `1.234` a number) and edit back that way.
+  `TEXT()` stays en-US. New workbooks are `Mappe1`/`Tabelle1`; the Accounting button shows `€`.
+  **Function help:** every function has a German description and German argument names
+  (`i18n/de_functions.rs`, written for German users). **Catalog:** 1,580 labels, every key the
+  other catalogs share plus the commands' menus and messages; the task panes and the dialogs'
+  direct labels now go through the catalog. **Reports:** the Analysis ToolPak and Solver write
+  their labels and sheet names in German (`Mittelwert`, `Standardfehler`, `Konfidenzniveau (95,0 %)`,
+  `Antwortbericht 1`, `Schlupf`; `crates/engine/src/report_text.rs`). Still English: the Scenario
+  Manager's summary, messages built with values, and the remaining untagged literals.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
@@ -79,7 +98,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus only | 8–12 h |
 | Japanese | ja | 943 (~43%) | dialogs and messages | CJK system-font fallback; IME unverified; no furigana display | no | menus, File view, dialogs, messages | 3–5 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; the theme's East Asian typeface (`<a:ea>`) survives open + save (rendering does not use it yet); IME unverified; no furigana display | no | menus only | 8–12 h |
-| German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
+| German | de | 1,580 (~70%) | dialogs, messages, function help | Latin: yes | no | formulas, numbers, dates, menus, dialogs | 2–4 h |
 | Italian | it | 971 (~44%) | dialogs, tooltips, pivot pane | Latin: yes | no | menus, File view, dialogs, pivot pane | 3–5 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
@@ -109,6 +128,9 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | German Analysis ToolPak and Solver reports: labels, titles and report sheet names follow the session locale (`report_text.rs`, one pass where each tool writes its report) |
+| 2026-10-23 | minor | German numbers and dates (`Locale::De`: separators, month and day names, de-DE built-ins, `WAHR`), German entry and editing of numbers, dates and booleans, `Mappe1`/`Tabelle1`, the `€` Accounting button, German function help for every function, and the German catalog at 1,580 labels (task panes and direct dialog labels routed through it). Observed in Excel de-DE (`crates/numfmt/src/tests.rs` `german`, `crates/ui-egui/tests/it/formula_locale.rs`) |
+| 2026-10-23 | minor | German formula syntax (`FormulaLocale::De`): error values in cells, the editor and the formula bar (`#WERT!`, `#NV`…), `;`/`,` separators, `.` array columns, `WAHR`/`FALSCH` and the 391 German function names; files and the API stay English. Spellings observed in Excel de-DE (`crates/formula/tests/it/german_input.rs`, `crates/ui-egui/tests/it/formula_locale.rs`). Argument hints and descriptions still English |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |
 | 2026-10-20 | minor | Japanese catalog (`i18n/ja.rs`) covers every key the Brazilian Portuguese catalog translates: the 398-label shared core moved verbatim plus 545 dialog, message, Backstage and menu strings — 943 keys, ~12% → ~43%. A test parses `pt.rs`'s source, so the two catalogs can't drift apart again. Portuguese re-measured at 943 (was 923) |

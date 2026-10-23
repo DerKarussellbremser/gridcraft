@@ -54,3 +54,33 @@ pub fn builtin_id(code: &str) -> Option<u32> {
     let n = norm(code);
     BUILTINS.iter().find(|(_, c)| norm(c) == n).map(|(id, _)| *id)
 }
+
+/// How Excel de-DE shows the built-in formats that follow the region (observed through its
+/// `NumberFormatLocal`), in en-US code syntax: `15.10.2026`, `1.234,50 €`, `-1.234 €`.
+const DE: [(u32, &str); 15] = [
+    (5, "#,##0 \"€\";-#,##0 \"€\""),
+    (6, "#,##0 \"€\";[Red]-#,##0 \"€\""),
+    (7, "#,##0.00 \"€\";-#,##0.00 \"€\""),
+    (8, "#,##0.00 \"€\";[Red]-#,##0.00 \"€\""),
+    (14, "dd.mm.yyyy"),
+    (15, "dd. mmm yy"),
+    (16, "dd. mmm"),
+    (17, "mmm yy"),
+    (20, "hh:mm"),
+    (21, "hh:mm:ss"),
+    (22, "dd.mm.yyyy hh:mm"),
+    (41, "_-* #,##0_-;-* #,##0_-;_-* \"-\"_-;_-@_-"),
+    (42, "_-* #,##0 \"€\"_-;-* #,##0 \"€\"_-;_-* \"-\" \"€\"_-;_-@_-"),
+    (43, "_-* #,##0.00_-;-* #,##0.00_-;_-* \"-\"??_-;_-@_-"),
+    (44, "_-* #,##0.00 \"€\"_-;-* #,##0.00 \"€\"_-;_-* \"-\"?? \"€\"_-;_-@_-"),
+];
+
+/// The code `loc` shows a built-in format with, when the region changes it. Only the exact
+/// built-in text matches (what XLSX import stores for a built-in id); custom codes never change.
+pub fn local_builtin(code: &str, loc: gridcraft_core::Locale) -> Option<&'static str> {
+    if loc == gridcraft_core::Locale::En {
+        return None;
+    }
+    let id = BUILTINS.iter().find(|(_, c)| *c == code)?.0;
+    DE.iter().find(|(i, _)| *i == id).map(|(_, c)| *c)
+}

@@ -5,6 +5,7 @@
 
 pub mod adjust;
 pub mod ast;
+mod german;
 mod input;
 pub mod lexer;
 pub mod parser;

@@ -376,7 +376,9 @@ impl SheetApp {
 
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        self.sync_locale();
         let r = self.run_command(id, params);
+        self.sync_locale();
         // This copy leaves the system clipboard alone: note what it holds, so Paste can tell
         // that GridCraft's copy is newer while that text is still there.
         if matches!(id, "edit.copy" | "edit.cut") && r.is_ok() {
@@ -954,7 +956,7 @@ impl SheetApp {
         } else {
             match sh.cell(at) {
                 Some(c) if c.formula.is_some() => formula_locale::display(&c.input_text(), locale, &d.wb, d.wb.active_sheet),
-                _ => gridcraft_engine::display::edit_text(&d.wb, sh, at),
+                _ => formula_locale::edit_text(&d.wb, sh, at, locale),
             }
         };
         let (text, replace) = match text {
@@ -1145,7 +1147,13 @@ impl SheetApp {
     }
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
+    /// Numbers and dates follow the interface language, as Excel follows the system's region.
+    fn sync_locale(&mut self) {
+        self.session.set_locale(self.ui.language.locale());
+    }
+
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.sync_locale();
         if self.session.text_width.is_none() {
             let ctx = ctx.clone();
             self.session.text_width = Some(std::sync::Arc::new(move |text, font, exact| theme::cell_text_width(&ctx, text, font, exact)));

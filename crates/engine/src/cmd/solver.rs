@@ -1872,14 +1872,24 @@ fn prepare_reports(d: &DocState, kinds: &[ReportKind], inp: &ReportInput) -> Res
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }
     let sh = d.wb.sheet(inp.model.sheet).ok_or(EngineError::NoDocument)?;
+    // Labels and sheet names in the session's language (`Antwortbericht 1` in German).
+    let loc = d.wb.locale;
+    let local = |t: String| crate::report_text::localize(loc, &t).unwrap_or(t);
     let mut built = Vec::new();
     for k in kinds {
         let lines = match k {
             ReportKind::Answer => answer_report(d, sh, inp),
             ReportKind::Limits => limits_report(d, sh, inp)?,
         };
+        let lines = lines
+            .into_iter()
+            .map(|(r, c, v, b)| match v {
+                Value::Text(t) => (r, c, Value::text(local(t.to_string()).as_str()), b),
+                v => (r, c, v, b),
+            })
+            .collect();
         let name = (1..=10_000u32)
-            .map(|i| format!("{} Report {i}", k.title()))
+            .map(|i| local(format!("{} Report {i}", k.title())))
             .find(|n| d.wb.sheet_index(n).is_none() && !built.iter().any(|(b, _): &(String, Lines)| b == n))
             .ok_or_else(|| EngineError::Other("Too many report sheets.".into()))?;
         built.push((name, lines));
@@ -2323,6 +2333,28 @@ mod tests {
         let d = s.doc().unwrap();
         let sh = d.wb.sheet(d.wb.sheet_index(name).unwrap()).unwrap();
         (0..60).find(|r| (0..8).any(|c| sh.value(CellRef::new(*r, c)) == Value::text(text))).unwrap()
+    }
+
+    #[test]
+    fn reports_are_written_in_the_session_language() {
+        let mut s = s();
+        s.set_locale(gridcraft_core::Locale::De);
+        s.execute("range.setValues", json!({"range": "A1", "values": [[0, 0], [null, null]]})).unwrap();
+        set(&mut s, &[("A2", "=3*A1+5*B1"), ("B2", "=A1+B1")]);
+        let solved = s
+            .execute(
+                "data.solver",
+                json!({"objective": "A2", "variables": "A1:B1", "constraints": ["B2 <= 4", "A1 <= 2.5"], "method": "simplex", "reports": ["answer"]}),
+            )
+            .unwrap();
+        assert_eq!(solved["reports"], json!(["Antwortbericht 1"]), "{solved}");
+        let a = "Antwortbericht 1";
+        assert_eq!(at(&s, a, "A1"), Value::text("GridCraft-Antwortbericht"));
+        let texts: Vec<Value> = (1..=30).flat_map(|r| ["A", "B", "C", "D", "E", "F", "G"].map(|c| at(&s, a, &format!("{c}{r}")))).collect();
+        for label in ["Lösungsmethode: Simplex-LP", "Zielzelle (Max)", "Ausgangswert", "Variablenzellen", "Nebenbedingungen", "Schlupf", "$A$1<=2,5"]
+        {
+            assert!(texts.contains(&Value::text(label)), "missing {label}: {texts:?}");
+        }
     }
 
     #[test]

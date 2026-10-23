@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod cs;
 mod de;
+mod de_functions;
 mod el;
 mod es;
 mod es_functions;
@@ -185,8 +186,18 @@ impl Language {
         }
     }
 
+    /// How numbers, dates and booleans are painted in this language (`1.234,56` in German).
+    pub fn locale(self) -> gridcraft_engine::core::Locale {
+        if self == Self::De { gridcraft_engine::core::Locale::De } else { gridcraft_engine::core::Locale::En }
+    }
+
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+        use gridcraft_engine::formula::FormulaLocale;
+        match self {
+            Self::Es => FormulaLocale::Es,
+            Self::De => FormulaLocale::De,
+            _ => FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
@@ -243,6 +254,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::De => Some((de_functions::DESCRIPTIONS, de_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -335,7 +347,15 @@ mod tests {
             for (table, catalog_text) in [(description_table, &descriptions), (argument_table, &arguments)] {
                 assert!(table.windows(2).all(|pair| pair[0].0 < pair[1].0), "{language:?} function help is not sorted and unique");
                 for (english, translated) in table {
-                    assert!(catalog_text.contains(english), "{language:?} translates {english:?}, which the function catalog doesn't use");
+                    // `FUNCTION|argument`: that function must exist and take that argument.
+                    let known = match english.split_once('|') {
+                        Some((function, argument)) => catalog.iter().any(|f| {
+                            f["name"] == *function
+                                && f["signature"].as_str().is_some_and(|s| crate::formula_locale::argument_names(s).contains(&argument))
+                        }),
+                        None => catalog_text.contains(english),
+                    };
+                    assert!(known, "{language:?} translates {english:?}, which the function catalog doesn't use");
                     assert!(!translated.is_empty(), "{language:?}: empty translation of {english:?}");
                 }
             }

@@ -31,6 +31,16 @@ pub(crate) fn canonical(
         let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));
         return Ok(format!("={}", formula::print(&expr?)));
     }
+    // German `#NV` enters the error `#N/A`; the English spelling is text there, as in Excel de-DE.
+    if let Some(e) = locale.parse_error(body.trim()) {
+        return Ok(e.as_str().to_string());
+    }
+    if gridcraft_engine::core::CellError::parse(body.trim()).is_some() {
+        return Ok(format!("'{body}"));
+    }
+    if locale == FormulaLocale::De {
+        return Ok(german_constant(body, wb).unwrap_or_else(|| text.to_string()));
+    }
     // Decimal-comma number entry follows the same preference, without rewriting text or dates.
     let normalized = body.trim().replace(locale.decimal_separator(), ".");
     let number = normalized.strip_suffix('%').unwrap_or(&normalized);
@@ -38,6 +48,67 @@ pub(crate) fn canonical(
         return Ok(normalized);
     }
     Ok(text.to_string())
+}
+
+/// A constant typed as in Excel de-DE, in the engine's en-US entry syntax: `WAHR`, `1.234,5`,
+/// `15.10.2026 13:30`, `15.10.` (this year), `15. Okt 26`. `1.5` is the 1st of May there, while
+/// `1.234` is a number because 234 is no month. `None` keeps the text as typed.
+fn german_constant(body: &str, wb: &Workbook) -> Option<String> {
+    use gridcraft_engine::core::{Locale, Value, parse::parse_input};
+    let t = body.trim();
+    for value in [true, false] {
+        if t.eq_ignore_ascii_case(Locale::De.boolean(value)) {
+            return Some(Locale::En.boolean(value).to_string());
+        }
+        // English `TRUE` is text there.
+        if t.eq_ignore_ascii_case(Locale::En.boolean(value)) {
+            return Some(format!("'{body}"));
+        }
+    }
+    let is_number = |s: &str| matches!(parse_input(s, wb.date_system).value, Value::Number(_));
+    if let Some(date) = german_date(t).filter(|d| is_number(d)) {
+        return Some(date);
+    }
+    let swapped: String = t
+        .chars()
+        .map(|c| match c {
+            '.' => ',',
+            ',' => '.',
+            c => c,
+        })
+        .collect();
+    is_number(&swapped).then_some(swapped)
+}
+
+/// `15.10.2026` → `10/15/2026`, `15.10.` → `10/15`, `15. Okt 2026` → `15-Oct-2026`, each
+/// with an optional time after a space.
+fn german_date(t: &str) -> Option<String> {
+    use gridcraft_engine::core::Locale;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let mut words = t.split_whitespace();
+    let first = words.next()?;
+    let date = match first.split('.').collect::<Vec<_>>().as_slice() {
+        [d, m, y] if digits(d) && digits(m) && digits(y) => format!("{m}/{d}/{y}"),
+        [d, m] | [d, m, ""] if digits(d) && digits(m) => format!("{m}/{d}"),
+        [d, ""] if digits(d) => {
+            let name = words.next()?.trim_end_matches('.').to_lowercase();
+            let month = (1..=12).find(|&i| Locale::De.month(i).to_lowercase() == name || Locale::De.month_short(i).to_lowercase() == name)?;
+            let en = Locale::En.month_short(month);
+            match words.clone().next().filter(|y| digits(y)) {
+                Some(y) => {
+                    words.next();
+                    format!("{d}-{en}-{y}")
+                }
+                None => format!("{d}-{en}"),
+            }
+        }
+        _ => return None,
+    };
+    match words.collect::<Vec<_>>().as_slice() {
+        [] => Some(date),
+        [time] if time.contains(':') => Some(format!("{date} {}", time.replace(',', "."))),
+        _ => None,
+    }
 }
 
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
@@ -52,6 +123,44 @@ pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: u
         .map(|body| format!("={body}"))
         .unwrap_or_else(|_| text.to_string());
     hide_udf_prefix(&shown, locale)
+}
+
+/// What the editor and formula bar start from for a constant: an error value in the formula
+/// syntax's spelling (`#NV`), and text that would enter as one quoted (`'#NV`). German shows
+/// numbers, dates and booleans as they are typed there (`1234,5`, `15.10.2026 13:30:00`, `WAHR`).
+pub(crate) fn edit_text(wb: &Workbook, sh: &gridcraft_engine::model::Sheet, at: gridcraft_engine::core::CellRef, locale: FormulaLocale) -> String {
+    use gridcraft_engine::core::{Locale, Value};
+    use gridcraft_engine::numfmt::{NumberFormat, format_value_in};
+    let code = wb.styles.get(sh.style_id(at)).num_fmt.as_str();
+    let de = locale == FormulaLocale::De;
+    match sh.cell(at).filter(|c| c.formula.is_none()).map(|c| &c.value) {
+        Some(Value::Error(e)) => locale.error_name(*e).to_string(),
+        Some(Value::Text(t))
+            if code != "@" && (locale.parse_error(t.trim()).is_some() || de && german_constant(t, wb).is_some_and(|c| !c.starts_with('\''))) =>
+        {
+            format!("'{t}")
+        }
+        Some(Value::Bool(b)) if de => Locale::De.boolean(*b).to_string(),
+        Some(Value::Number(n)) if de && NumberFormat::parse_cached(code).is_date() => {
+            let edit = match (*n >= 1.0, n.fract() != 0.0) {
+                (true, true) => "dd.mm.yyyy hh:mm:ss",
+                (true, false) => "dd.mm.yyyy",
+                (false, _) => "hh:mm:ss",
+            };
+            format_value_in(&Value::Number(*n), &NumberFormat::parse_cached(edit), wb.date_system, Locale::De).text
+        }
+        Some(Value::Number(_)) if de => {
+            let raw = gridcraft_engine::display::edit_text(wb, sh, at);
+            raw.chars()
+                .map(|c| match c {
+                    '.' => ',',
+                    ',' => '.',
+                    c => c,
+                })
+                .collect()
+        }
+        _ => gridcraft_engine::display::edit_text(wb, sh, at),
+    }
 }
 
 const UDF_PREFIX: &str = "_xludf.";
@@ -85,7 +194,7 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -
     let english = crate::formula_bar::function_signature(locale.canonical_name(name))?;
     let Some((head, args)) = split_signature(&english) else { return Some(english) };
     let separator = format!("{} ", locale.list_separator());
-    let args = match args.iter().map(|arg| translate_argument(arg, language)).collect::<Option<Vec<_>>>() {
+    let args = match args.iter().map(|arg| translate_argument(head, arg, language)).collect::<Option<Vec<_>>>() {
         Some(translated) => translated.join(&separator),
         None => args.join(&separator),
     };
@@ -120,14 +229,16 @@ fn argument_name(arg: &str) -> &str {
     arg.trim_end_matches(|c: char| c.is_ascii_digit())
 }
 
-/// `[number2]` -> `[número2]`: brackets, index and `...` stay.
-fn translate_argument(arg: &str, language: Language) -> Option<String> {
+/// `[number2]` -> `[número2]`: brackets, index and `...` stay. A `FUNCTION|argument` entry wins
+/// over the plain name (PERCENTRANK's `significance` is a digit count, CEILING's a step).
+fn translate_argument(function: &str, arg: &str, language: Language) -> Option<String> {
     let name = argument_name(arg);
     if name == "..." {
         return Some(arg.to_string());
     }
+    let translated = language.function_argument(&format!("{function}|{name}")).or_else(|| language.function_argument(name))?;
     // `arg` is `[`? + `name` + index + `]`?, so the first match is the name itself.
-    Some(arg.replacen(name, language.function_argument(name)?, 1))
+    Some(arg.replacen(name, translated, 1))
 }
 
 /// Avoid suggesting an alias that would call a workbook/table name instead of the function.
@@ -176,5 +287,23 @@ mod tests {
         assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
         assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
+        // German: every function has help, in German names and separators.
+        use FormulaLocale::De;
+        assert_eq!(sig("wenn", De, Language::De), "WENN(Prüfung; [Dann_Wert]; [Sonst_Wert])");
+        assert_eq!(sig("SVERWEIS", De, Language::De), "SVERWEIS(Suchwert; Matrix; Spaltenindex; [Bereich_Verweis])");
+        assert_eq!(sig("QUANTILSRANG", De, Language::De), "QUANTILSRANG(Matrix; x; [Genauigkeit])");
+        assert!(sig("OBERGRENZE", De, Language::De).ends_with("(Zahl; Schritt)"), "{}", sig("OBERGRENZE", De, Language::De));
+        assert_eq!(description("SUMME", De, Language::De).as_deref(), Some("Addiert alle Zahlen der Argumente."));
+        assert_eq!(description("ERFC", De, Language::De).as_deref(), Some("Komplementäre Fehlerfunktion, 1 - GAUSSFEHLER(x)."));
+        for f in gridcraft_engine::cmd::formulas::function_list() {
+            let name = f["name"].as_str().unwrap_or_default();
+            let english = f["description"].as_str().unwrap_or_default();
+            assert_ne!(description(name, De, Language::De).as_deref(), Some(english), "{name} has no German description");
+            // Every argument has a German name, so no hint falls back to English.
+            let english_signature = crate::formula_bar::function_signature(name).unwrap_or_default();
+            for argument in argument_names(&english_signature) {
+                assert!(Language::De.function_argument(argument).is_some(), "{name}: no German name for {argument}");
+            }
+        }
     }
 }

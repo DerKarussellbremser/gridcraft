@@ -3,7 +3,7 @@
 use gridcraft_calc::evaluate;
 use gridcraft_core::{CellRef, RangeRef, Value, category_levels, number_to_text};
 use gridcraft_model::{Chart, ChartKind, Theme, Workbook, style::apply_tint};
-use gridcraft_numfmt::{NumberFormat, format_value};
+use gridcraft_numfmt::NumberFormat;
 
 use crate::{ChartData, Rgba, SeriesData, TrendlineData};
 
@@ -151,7 +151,7 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (
                 if let Some(c) = at {
                     let code = &wb.styles.get(s.style_id(c)).num_fmt.0;
                     if !code.eq_ignore_ascii_case("general") {
-                        return format_value(v, &NumberFormat::parse_cached(code), wb.date_system).text;
+                        return gridcraft_numfmt::format_value_in(v, &NumberFormat::parse_cached(code), wb.date_system, wb.locale).text;
                     }
                 }
             }
@@ -274,5 +274,5 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, category_levels, series, palette }
+    ChartData { categories, category_levels, series, palette, locale: wb.locale }
 }

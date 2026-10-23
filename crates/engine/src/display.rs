@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Sheet, Workbook};
-use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
+use gridcraft_numfmt::{Formatted, NumberFormat};
 
 /// Parsed number formats are cached by code.
 fn parsed(code: &str) -> NumberFormat {
@@ -30,7 +30,7 @@ pub fn number_format(code: &str) -> NumberFormat {
 
 /// Formats a value with a format code.
 pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
-    format_value(v, &parsed(code), wb.date_system)
+    gridcraft_numfmt::format_value_in(v, &parsed(code), wb.date_system, wb.locale)
 }
 
 /// Whether typing `t` back into a General cell would not give the text `t` again (it would parse
@@ -69,10 +69,15 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     }
     let Value::Number(n) = &cell.value else { return raw };
     let code = wb.styles.get(cell.style).num_fmt.as_str();
+    let reads_back = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9);
+    // A percentage edits as Excel shows it in the formula bar, `12.5%`, not as `0.125`.
+    if cell.formula.is_none() && parsed(code).is_percent() {
+        let shown = format!("{}%", gridcraft_core::number_to_text(n * 100.0));
+        return if reads_back(&shown) { shown } else { raw };
+    }
     if cell.formula.is_some() || !parsed(code).is_date() {
         return raw;
     }
-    let reads_back = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9);
     let shown = format(&cell.value, code, wb).text;
     if reads_back(&shown) {
         return shown;

@@ -1,7 +1,7 @@
 //! Value-axis scaling ("nice numbers") and label formatting.
 
 use gridcraft_core::{DateSystem, Value, number_to_text};
-use gridcraft_numfmt::{NumberFormat, format_value};
+use gridcraft_numfmt::NumberFormat;
 
 /// Largest magnitude we plot; bigger values are clamped so ranges stay finite.
 pub(crate) const MAX_ABS: f64 = 1e300;
@@ -116,13 +116,18 @@ pub(crate) fn fixed_scale(min: f64, max: f64, step: f64) -> Scale {
 pub(crate) struct Fmt {
     general: bool,
     fmt: NumberFormat,
+    loc: gridcraft_core::Locale,
 }
 
 impl Fmt {
     pub fn new(code: &str) -> Fmt {
         let t = code.trim();
         let general = t.is_empty() || t.eq_ignore_ascii_case("general");
-        Fmt { general, fmt: NumberFormat::parse_cached(if general { "General" } else { t }) }
+        Fmt { general, fmt: NumberFormat::parse_cached(if general { "General" } else { t }), loc: gridcraft_core::Locale::En }
+    }
+    /// Writes the labels in `loc` (`1.234,5` in German).
+    pub fn in_locale(self, loc: gridcraft_core::Locale) -> Fmt {
+        Fmt { loc, ..self }
     }
     /// Formats `v`; `step` (axis labels) fixes the decimals for General.
     pub fn format(&self, v: f64, step: Option<f64>) -> String {
@@ -134,9 +139,9 @@ impl Fmt {
             v = 0.0;
         }
         if self.general {
-            return general_text(v, step);
+            return self.loc.general(general_text(v, step));
         }
-        let mut t = format_value(&Value::Number(v), &self.fmt, DateSystem::D1900).text;
+        let mut t = gridcraft_numfmt::format_value_in(&Value::Number(v), &self.fmt, DateSystem::D1900, self.loc).text;
         if t.chars().count() > 40 {
             t = t.chars().take(40).collect();
         }

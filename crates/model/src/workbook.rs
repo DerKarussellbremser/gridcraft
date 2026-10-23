@@ -193,6 +193,10 @@ pub struct Workbook {
     /// the links in memory are still written for the old one. Not in JSON.
     #[serde(skip)]
     pub source_path: Option<std::path::PathBuf>,
+    /// How numbers, dates and booleans are painted (`1.234,56` in German): the session's
+    /// regional setting, never part of the file. Not in JSON.
+    #[serde(skip)]
+    pub locale: gridcraft_core::Locale,
 }
 
 fn is_all(s: &ShowObjects) -> bool {
@@ -228,6 +232,7 @@ impl Workbook {
             preserved: None,
             source_dir: None,
             source_path: None,
+            locale: gridcraft_core::Locale::En,
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {
@@ -244,7 +249,8 @@ impl Workbook {
     }
     /// A fresh sheet name `SheetN` not in use.
     pub fn next_sheet_name(&self) -> String {
-        (1..).map(|n| format!("Sheet{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| "Sheet".into())
+        let base = self.locale.sheet_name();
+        (1..).map(|n| format!("{base}{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| base.into())
     }
     /// Validates a sheet name like Excel: 1–31 chars, none of `: \ / ? * [ ]`, not starting or
     /// ending with `'`, unique (case-insensitive) unless it is `except`'s own name.

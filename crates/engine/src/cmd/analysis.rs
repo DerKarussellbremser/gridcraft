@@ -1109,6 +1109,8 @@ fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> 
         return Err(EngineError::Other(format!("The output range {} {OVERWRITE_ERROR}; pass overwrite: true to replace it.", rect.a1())));
     }
     let sheet_name = new_sheet.clone().or_else(|| d.wb.sheet(si).map(|sh| sh.name.clone())).unwrap_or_default();
+    // The report's labels in the session's language (`Mittelwert` in German).
+    let loc = d.wb.locale;
     let new_index = edit(s, |cx| {
         let pct_fmt = NumFmt::new("0.00%");
         if let Some(name) = &new_sheet {
@@ -1130,7 +1132,11 @@ fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> 
         for ((r, c), v) in &g.cells {
             let cell = CellRef::new(at.row + r, at.col + c);
             let style = pct_styles.get(&cell).copied().unwrap_or_else(|| sh.style_id(cell));
-            sh.set_cell(cell, Cell { value: v.clone(), formula: None, style });
+            let value = match v {
+                Value::Text(t) => crate::report_text::localize(loc, t).map_or_else(|| v.clone(), |t| Value::text(t.as_str())),
+                _ => v.clone(),
+            };
+            sh.set_cell(cell, Cell { value, formula: None, style });
             touched.push(cell);
         }
         for c in touched {
@@ -1228,6 +1234,25 @@ mod tests {
         let g = super::forecast_grid(&x, &f, 3, &json!({"standardErrors": true}));
         assert_eq!(g.cells.get(&(5, 1)), Some(&Value::Error(gridcraft_core::CellError::NA)));
         assert!(g.cells.get(&(6, 1)).and_then(Value::as_f64).is_some());
+    }
+
+    /// German Excel writes its reports in German; the user's own label stays as typed.
+    #[test]
+    fn reports_are_written_in_the_session_language() {
+        let mut s = s();
+        s.set_locale(gridcraft_core::Locale::De);
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Score"], [1], [2], [3], [4], [5]]})).unwrap();
+        s.execute(
+            "data.analysisToolPak",
+            json!({"tool": "Descriptive Statistics", "range": "A1:A6", "labels": true, "output": "C1", "confidence": 95, "kthLargest": 2}),
+        )
+        .unwrap();
+        assert_eq!(v(&s, "C1"), Value::text("Score"));
+        assert_eq!(v(&s, "C3"), Value::text("Mittelwert"));
+        assert_eq!(v(&s, "C4"), Value::text("Standardfehler"));
+        let labels: Vec<Value> = (3..=18).map(|r| v(&s, &format!("C{r}"))).collect();
+        assert!(labels.contains(&Value::text("Größter(2)")), "{labels:?}");
+        assert!(labels.contains(&Value::text("Konfidenzniveau (95,0 %)")), "{labels:?}");
     }
 
     #[test]

@@ -662,7 +662,7 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, Locale::En);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
@@ -888,4 +888,89 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(parse::parse_sections("[unknown;x]0;0").len(), 2);
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
+}
+
+/// Excel de-DE output, observed cell by cell (`Range.Text`) with the same codes and values.
+mod german {
+    use super::*;
+
+    fn de(code: &str, n: f64) -> String {
+        format_value_in(&Value::Number(n), &NumberFormat::parse(code), S, Locale::De).text
+    }
+
+    #[test]
+    fn separators_follow_the_locale_and_literals_do_not() {
+        let n = 1234567.891;
+        for (code, shown) in [
+            ("General", "1234567,891"),
+            ("0", "1234568"),
+            ("0.00", "1234567,89"),
+            ("#,##0", "1.234.568"),
+            ("#,##0.00", "1.234.567,89"),
+            ("0.00%", "123456789,10%"),
+            ("0.00E+00", "1,23E+06"),
+            ("##0.0E+0", "1,2E+6"),
+            ("# ?/?", "1234567 8/9"),
+            ("0.0,", "1234,6"),
+            ("#,##0,,", "1"),
+            ("0\".\"0", "123456.8"),
+            ("\\.0", ".1234568"),
+            ("0\\,0", "123456,8"),
+            ("#,##0.00 [$€-407]", "1.234.567,89 €"),
+        ] {
+            assert_eq!(de(code, n), shown, "{code}");
+        }
+        for (n, shown) in [(0.5, "0,5"), (-1234.5, "-1234,5"), (1e20, "1E+20"), (1.23456789012e-5, "1,23457E-05"), (123456789012.0, "1,23457E+11")] {
+            assert_eq!(de("General", n), shown, "{n}");
+        }
+        // en-US is unchanged.
+        assert_eq!(f("#,##0.00", n), "1,234,567.89");
+    }
+
+    #[test]
+    fn dates_use_german_names_and_built_ins_the_german_shape() {
+        let d = 46310.5625; // Thursday 2026-10-15 13:30
+        for (code, shown) in [
+            ("m/d/yyyy", "15.10.2026"),
+            ("d-mmm-yy", "15. Okt 26"),
+            ("d-mmm", "15. Okt"),
+            ("mmm-yy", "Okt 26"),
+            ("m/d/yyyy h:mm", "15.10.2026 13:30"),
+            ("h:mm AM/PM", "1:30 PM"),
+            ("h:mm", "13:30"),
+            ("mm:ss.0", "30:00,0"),
+            ("dddd, mmmm d, yyyy", "Donnerstag, Oktober 15, 2026"),
+            ("ddd d mmm", "Do 15 Okt"),
+            ("mmmmm", "O"),
+            ("d. mmmm yyyy", "15. Oktober 2026"),
+        ] {
+            assert_eq!(de(code, d), shown, "{code}");
+        }
+        assert_eq!(de("h:mm", 0.3826), "09:10");
+        let names = (1..=12).map(|m| de("mmm mmmm", 46022.0 + 31.0 * (m - 1) as f64)).collect::<Vec<_>>();
+        assert_eq!(names[2], "Mrz März");
+        assert_eq!(names[4], "Mai Mai");
+        // A custom code that only looks like a built-in keeps its own shape.
+        assert_eq!(de("d/m/yyyy", d), "15/10/2026");
+    }
+
+    #[test]
+    fn currency_and_accounting_built_ins_show_euros() {
+        let code = |id| builtin_format(id).unwrap_or_default();
+        assert_eq!(de(code(7), 1234.5), "1.234,50 €");
+        assert_eq!(de(code(7), -1234.5), "-1.234,50 €");
+        assert_eq!(de(code(5), 1234.5), "1.235 €");
+        assert_eq!(de(code(39), -1234.5), "(1.234,50)");
+        assert_eq!(de(code(44), 1234.5).trim(), "1.234,50 €");
+        assert_eq!(de(code(44), -1234.5).replace(' ', ""), "-1.234,50€");
+        assert_eq!(de(code(44), 0.0).split_whitespace().collect::<Vec<_>>(), ["-", "€"]);
+    }
+
+    #[test]
+    fn booleans_are_german() {
+        let g = NumberFormat::general();
+        assert_eq!(format_value_in(&Value::Bool(true), &g, S, Locale::De).text, "WAHR");
+        assert_eq!(format_value_in(&Value::Bool(false), &g, S, Locale::De).text, "FALSCH");
+        assert_eq!(format_value(&Value::Bool(true), &g, S).text, "TRUE");
+    }
 }

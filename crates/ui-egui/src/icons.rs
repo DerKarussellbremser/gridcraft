@@ -33,6 +33,8 @@ pub enum Icon {
     Wrap,
     Merge,
     Currency,
+    /// The Accounting button where the currency is the euro (German).
+    CurrencyEuro,
     Percent,
     Comma,
     DecInc,
@@ -327,6 +329,7 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.poly(&[(13.0, 8.0), (10.5, 6.5), (10.5, 9.5)], BLUE);
         }
         Icon::Currency => g.text(8.0, 8.5, "$", 12.0, c, false, false),
+        Icon::CurrencyEuro => g.text(8.0, 8.5, "€", 12.0, c, false, false),
         Icon::Percent => g.text(8.0, 8.5, "%", 11.0, c, false, false),
         Icon::Comma => g.text(8.0, 7.0, ",", 14.0, c, true, false),
         Icon::DecInc => {

@@ -19,6 +19,7 @@ pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+mod report_text;
 pub mod sample;
 pub mod selection;
 pub mod tables;
@@ -196,6 +197,34 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
+    /// An untouched blank workbook takes the new language's default names (`Book1` with `Sheet1`
+    /// becomes `Mappe1` with `Tabelle1`), as if it had been created in that language.
+    fn rename_blank(&mut self, old: gridcraft_core::Locale, loc: gridcraft_core::Locale) {
+        let blank = self.path.is_none() && !self.is_dirty() && self.undo.is_empty() && self.wb.sheets.iter().all(|sh| sh.cells.is_empty());
+        let Some(n) = self.title.strip_prefix(old.book_name()).filter(|n| blank && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) else {
+            return;
+        };
+        self.title = format!("{}{n}", loc.book_name());
+        let wb = Arc::make_mut(&mut self.wb);
+        for sh in &mut wb.sheets {
+            if let Some(k) = sh.name.strip_prefix(old.sheet_name()).filter(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit())) {
+                let name = format!("{}{k}", loc.sheet_name());
+                Arc::make_mut(sh).name = name;
+            }
+        }
+        self.saved = self.wb.clone();
+    }
+    /// Paints this workbook in `loc`. Session state, like the view: never a change to save.
+    pub fn set_locale(&mut self, loc: gridcraft_core::Locale) {
+        if self.wb.locale == loc {
+            return;
+        }
+        let dirty = self.is_dirty();
+        Arc::make_mut(&mut self.wb).locale = loc;
+        if !dirty {
+            self.saved = self.wb.clone();
+        }
+    }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet
     }
@@ -294,6 +323,8 @@ pub struct Session {
     active: usize,
     pub clipboard: Option<Clipboard>,
     pub prefs: Prefs,
+    /// Regional setting every open workbook is painted in ([`Session::set_locale`]).
+    pub locale: gridcraft_core::Locale,
     pub mode: Mode,
     /// Commands run so far, without their passwords ([`cmd::journal_params`]).
     pub journal: Vec<(String, Json)>,
@@ -352,7 +383,8 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
-    pub fn add_document(&mut self, d: DocState) -> usize {
+    pub fn add_document(&mut self, mut d: DocState) -> usize {
+        d.set_locale(self.locale);
         self.docs.push(d);
         self.active = self.docs.len() - 1;
         self.active
@@ -365,15 +397,20 @@ impl Session {
             }
         }
     }
-    /// A new blank workbook titled `BookN`.
+    /// A new blank workbook titled `BookN` (`MappeN` in German), its sheets `SheetN` (`TabelleN`).
     pub fn new_workbook(&mut self) -> usize {
-        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
+        let book = self.locale.book_name();
+        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book}{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
+        wb.locale = self.locale;
+        if let Some(first) = wb.sheets.first_mut() {
+            Arc::make_mut(first).name = format!("{}1", self.locale.sheet_name());
+        }
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
-        self.add_document(DocState::new(wb, None, format!("Book{n}")))
+        self.add_document(DocState::new(wb, None, format!("{book}{n}")))
     }
 
     /// Journals a command, then trims the oldest entries past either cap. A recording in progress
@@ -405,6 +442,18 @@ impl Session {
             self.journal_sizes.drain(..n);
             self.journal_bytes = kept;
             self.recording = self.recording.map(|r| r.saturating_sub(n));
+        }
+    }
+
+    /// Paints numbers and dates in every open workbook, and every later one, in `loc`.
+    pub fn set_locale(&mut self, loc: gridcraft_core::Locale) {
+        let old = self.locale;
+        self.locale = loc;
+        for d in &mut self.docs {
+            if old != loc {
+                d.rename_blank(old, loc);
+            }
+            d.set_locale(loc);
         }
     }
 
@@ -449,6 +498,11 @@ impl Session {
             push_history(&mut d.undo, spec.label.trim_end_matches('…').to_string(), wb, &d.wb, sel);
             d.redo.clear();
             d.revision += 1;
+        }
+        // Undo, redo and file commands bring back workbooks painted in another locale.
+        let loc = self.locale;
+        for d in &mut self.docs {
+            d.set_locale(loc);
         }
         result
     }
