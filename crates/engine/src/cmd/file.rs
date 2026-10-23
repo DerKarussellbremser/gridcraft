@@ -91,9 +91,11 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
     if !shown.is_empty() {
-        let mut message = shown.iter().take(5).copied().collect::<Vec<_>>().join("\n\n");
+        // The notes in the session's language; the command's result keeps them in English.
+        let local = |t: String| crate::import_text::localize(s.locale, &t).unwrap_or(t);
+        let mut message = shown.iter().take(5).map(|w| local(w.to_string())).collect::<Vec<_>>().join("\n\n");
         if shown.len() > 5 {
-            message.push_str(&format!("\n\n{} additional import warnings.", shown.len() - 5));
+            message.push_str(&format!("\n\n{}", local(format!("{} additional import warnings.", shown.len() - 5))));
         }
         s.ui_requests.push(crate::UiRequest::Message(message));
     }
