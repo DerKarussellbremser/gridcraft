@@ -892,11 +892,16 @@ struct Block<'a> {
     xs: Vec<f32>,
     ys: Vec<f32>,
     k: f32,
-    /// Points per sheet pixel of column width / row height (see [`SheetLayout::kx`]).
+    /// Points per sheet pixel of column width (see [`SheetLayout::kx`]).
     kx: f32,
-    ky: f32,
+    /// Printed per shown height of set and automatic rows (see [`grid_print_scale`]).
+    row_k: f32,
+    auto_row_k: f32,
     scale: f32,
 }
+
+/// Rows a position outside its block is summed over, at most; farther ones use the set-row factor.
+const MAX_SUMMED_ROWS: u32 = 100_000;
 
 impl Block<'_> {
     fn x(&self, col: u32) -> f32 {
@@ -906,12 +911,30 @@ impl Block<'_> {
         let x0 = self.xs.first().copied().unwrap_or(0.0);
         x0 + ((self.sh.col_left(col) - self.sh.col_left(self.cols.0)) as f32) * self.kx
     }
+    /// Points per sheet pixel of row `r`'s height on the page.
+    fn ky_of(&self, r: u32) -> f32 {
+        self.k * if self.sh.rows.get(&r).is_some_and(|i| i.custom) { self.row_k } else { self.auto_row_k }
+    }
+    /// Page y of a row's top edge: exact inside the block, the printed heights summed outside it.
     fn y(&self, row: u32) -> f32 {
         if row >= self.rows.0 && row <= self.rows.1 + 1 {
             return self.ys.get((row - self.rows.0) as usize).copied().unwrap_or(0.0);
         }
-        let y0 = self.ys.first().copied().unwrap_or(0.0);
-        y0 + ((self.sh.row_top(row) - self.sh.row_top(self.rows.0)) as f32) * self.ky
+        let (top, bottom) = (self.ys.first().copied().unwrap_or(0.0), self.ys.last().copied().unwrap_or(0.0));
+        let (from, to) = if row < self.rows.0 { (row, self.rows.0) } else { (self.rows.1.saturating_add(1), row) };
+        let span = if to - from <= MAX_SUMMED_ROWS {
+            (from..to).map(|r| self.sh.row_height(r) * self.ky_of(r)).sum::<f32>()
+        } else {
+            (self.sh.row_top(to) - self.sh.row_top(from)) as f32 * self.k * self.row_k
+        };
+        if row < self.rows.0 { top - span } else { bottom + span }
+    }
+    /// Page rectangle of an object anchored at a cell: it moves with the printed grid and keeps
+    /// its size.
+    fn place(&self, a: &Anchor) -> (f32, f32, f32, f32) {
+        let x = self.x(a.cell.col) + a.dx * self.kx;
+        let y = self.y(a.cell.row) + a.dy * self.ky_of(a.cell.row);
+        (x, y, a.width.max(0.0) * self.k, a.height.max(0.0) * self.k)
     }
     fn rect(&self, r: RangeRef) -> (f32, f32, f32, f32) {
         let (x0, y0) = (self.x(r.start.col), self.y(r.start.row));
@@ -1092,7 +1115,8 @@ struct PrintedBlock {
     x: f32,
     y: f32,
     kx: f32,
-    ky: f32,
+    /// Page y of each row's top edge in the block (rows print by different factors).
+    ys: Vec<f32>,
 }
 
 /// PDF annotations are not affected by graphics clipping, so intersect each cell with its page
@@ -1130,7 +1154,7 @@ fn printed_target(wb: &Workbook, blocks: &[PrintedBlock], source_sheet: usize, t
     let sh = wb.sheet(sheet)?;
     let block = blocks.iter().find(|b| b.sheet == sheet && (b.rows.0..=b.rows.1).contains(&cell.row) && (b.cols.0..=b.cols.1).contains(&cell.col))?;
     let x = block.x + (sh.col_left(cell.col) - sh.col_left(block.cols.0)) as f32 * block.kx;
-    let y = block.y + (sh.row_top(cell.row) - sh.row_top(block.rows.0)) as f32 * block.ky;
+    let y = block.ys.get((cell.row - block.rows.0) as usize).copied().unwrap_or(block.y);
     Some((block.page, x, y))
 }
 
@@ -1397,8 +1421,6 @@ fn draw_objects(
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
-    // Objects move with the printed grid but keep their size.
-    let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.kx, by + ((r.1 - sy0) as f32) * b.ky, r.2 as f32 * b.k, r.3 as f32 * b.k);
     pg.save();
     pg.clip_rect(bx, by, bw, bh);
     draw_sparklines(pg, wb, si, sh, b, block);
@@ -1407,7 +1429,7 @@ fn draw_objects(
         if !visible(r) {
             continue;
         }
-        let (x, y, w, h) = place(r);
+        let (x, y, w, h) = b.place(&im.anchor);
         // About 150 dpi is plenty for print.
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
         let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
@@ -1420,7 +1442,7 @@ fn draw_objects(
         if !visible(r) {
             continue;
         }
-        let (x, y, w, h) = place(r);
+        let (x, y, w, h) = b.place(&shp.anchor);
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
     for ch in &sh.charts {
@@ -1428,7 +1450,7 @@ fn draw_objects(
         if !visible(r) {
             continue;
         }
-        let (x, y, _, _) = place(r);
+        let (x, y, _, _) = b.place(&ch.anchor);
         let data = gridcraft_chart::resolve(wb, si, ch);
         let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
@@ -1594,10 +1616,7 @@ fn make_block<'a>(wb: &'a Workbook, si: usize, sh: &'a Sheet, rows: (u32, u32), 
         acc += lay.drawn_row_h(sh, r) * k;
         ys.push(acc);
     }
-    // Set and automatic rows draw by different factors; positions between rows use the block's.
-    let shown = (sh.row_top(rows.1.saturating_add(1)) - sh.row_top(rows.0)) as f32;
-    let ky = if shown > 0.0 { (acc - y) / shown } else { k * lay.row_k };
-    Block { wb, si, sh, rows, cols, xs, ys, k, kx, ky, scale: lay.scale }
+    Block { wb, si, sh, rows, cols, xs, ys, k, kx, row_k: lay.row_k, auto_row_k: lay.auto_row_k, scale: lay.scale }
 }
 
 /// Segments of a page along one axis: repeated titles (before the band) then the band.
@@ -1658,7 +1677,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, x, y, lay);
                     draw_block(pg, &b, lay.settings.gridlines, &mut cf);
                     draw_block_links(pg, &b, page_index, &mut pending_links);
-                    printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, kx: b.kx, ky: b.ky });
+                    printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, kx: b.kx, ys: b.ys.clone() });
                     if lay.settings.headings {
                         draw_headings(pg, &b, rsi == 0, csi == 0, (ox, oy), (lay.heading_w * k, lay.heading_h * k));
                     }
@@ -2277,6 +2296,35 @@ mod tests {
         if charts > 0 {
             assert!(contains(&pdf, "(Apples) Tj") || contains(&pdf, "(Qty) Tj"));
         }
+    }
+
+    /// Set and automatic rows print by different factors; a picture anchored at a row still sits on
+    /// that row's printed edge (not where an average factor would put it).
+    #[test]
+    fn a_picture_sits_on_its_rows_printed_edge_among_set_and_automatic_rows() {
+        let mut s = s();
+        s.execute("home.rowHeight", json!({"rows": "2:2", "points": 40})).unwrap();
+        s.execute("home.borders", json!({"range": "A8", "preset": "top", "style": "thick"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C12", "input": "x"})).unwrap();
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255])))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let id = wb.next_object_id();
+        let anchor = Anchor { cell: CellRef::new(7, 0), dx: 0.0, dy: 0.0, width: 40.0, height: 20.0, mode: gridcraft_model::AnchorMode::MoveAndSize };
+        wb.sheet_mut(0).unwrap().images.push(Image { id, anchor, data: png.into(), mime: "image/png".into(), alt: String::new() });
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        let text = String::from_utf8_lossy(&pdf);
+        // The picture: `q w 0 0 h x y cm /Im1 Do Q`, its top at y + h (PDF y grows up).
+        let cm: Vec<f32> = text.split(" cm /Im1").next().unwrap().rsplit("q ").next().unwrap().split(' ').map(|v| v.parse().unwrap()).collect();
+        let top = cm[5] + cm[3];
+        // The thick border on A8's top edge: `x0 y m x1 y l S` at that same height.
+        let border = text
+            .lines()
+            .any(|l| l.ends_with(" l S") && l.split(' ').nth(1).and_then(|y| y.parse::<f32>().ok()).is_some_and(|y| (y - top).abs() < 0.05));
+        assert!(border, "picture top {top} has no border line at its height");
     }
 
     #[test]
