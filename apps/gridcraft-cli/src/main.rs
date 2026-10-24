@@ -49,7 +49,44 @@ const USAGE: &str = "usage:
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]
-  gridcraft-cli version";
+  gridcraft-cli version
+anywhere: --locale de|en   number and date conventions of shown and exported values (default en)";
+
+/// The `--locale` the command line asked for (English when none).
+static LOCALE: std::sync::OnceLock<gridcraft_engine::core::Locale> = std::sync::OnceLock::new();
+
+/// Takes `--locale X` / `--locale=X` out of the arguments, wherever it stands (the last one wins).
+fn take_locale(args: Vec<String>) -> Result<(Vec<String>, Option<gridcraft_engine::core::Locale>), String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut found = None;
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        let value = match a.strip_prefix("--locale") {
+            Some("") => it.next().ok_or("--locale needs a value (de or en)")?,
+            Some(v) if v.starts_with('=') => v[1..].to_string(),
+            _ => {
+                out.push(a);
+                continue;
+            }
+        };
+        let locale = match value.to_ascii_lowercase().as_str() {
+            "de" | "de-de" => gridcraft_engine::core::Locale::De,
+            "en" | "en-us" => gridcraft_engine::core::Locale::En,
+            other => return Err(format!("unknown --locale `{other}` (de or en)")),
+        };
+        found = Some(locale);
+    }
+    Ok((out, found))
+}
+
+/// A session in the `--locale` conventions.
+fn new_session() -> Session {
+    let mut session = Session::new();
+    if let Some(locale) = LOCALE.get() {
+        session.set_locale(*locale);
+    }
+    session
+}
 
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
 /// other write error is reported.
@@ -62,7 +99,18 @@ fn stdout_failed(e: std::io::Error) -> ! {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = match take_locale(std::env::args().skip(1).collect()) {
+        Ok((args, locale)) => {
+            if let Some(locale) = locale {
+                let _ = LOCALE.set(locale);
+            }
+            args
+        }
+        Err(e) => {
+            eprintln!("gridcraft-cli: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
         Some("--version" | "-V" | "version") => {
@@ -166,13 +214,13 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
 }
 
 fn open(path: &str) -> Result<Session, String> {
-    let mut s = Session::new();
+    let mut s = new_session();
     exec(&mut s, "file.open", json!({"path": path}))?;
     Ok(s)
 }
 
 fn blank() -> Session {
-    let mut s = Session::new();
+    let mut s = new_session();
     s.new_workbook();
     s
 }
@@ -407,7 +455,7 @@ fn run(args: &[String]) -> Result<(), String> {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
         (Some(p), None) => open(p)?,
         (None, Some(name)) => {
-            let mut s = Session::new();
+            let mut s = new_session();
             exec(&mut s, "file.new", json!({"sample": name}))?;
             s
         }
@@ -454,7 +502,7 @@ fn run(args: &[String]) -> Result<(), String> {
 fn commands(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["search"], &["json"])?;
     let q = a.opt("search").or(a.positional.first().map(String::as_str)).map(str::to_ascii_lowercase);
-    let s = Session::new();
+    let s = new_session();
     let list: Vec<_> = s
         .commands()
         .into_iter()
@@ -493,7 +541,7 @@ fn functions(args: &[String]) -> Result<(), String> {
     if let Some(c) = a.opt("category") {
         p["category"] = json!(c);
     }
-    let mut s = Session::new();
+    let mut s = new_session();
     let v = exec(&mut s, "formulas.functions", p)?;
     if a.has("json") {
         outln!("{}", pretty(&v));
@@ -529,7 +577,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             let session = match (a.opt("in"), a.opt("sample")) {
                 (Some(p), _) => open(p)?,
                 (None, Some(name)) => {
-                    let mut s = Session::new();
+                    let mut s = new_session();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
                     s
                 }
@@ -568,6 +616,20 @@ fn send(args: &[String]) -> Result<(), String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn locale_is_taken_from_anywhere_on_the_command_line() {
+        use gridcraft_engine::core::Locale;
+        let args = |s: &[&str]| s.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        let (rest, locale) = take_locale(args(&["run", "--in", "a.xlsx", "--locale", "de", "--quiet"])).unwrap();
+        assert_eq!((rest, locale), (args(&["run", "--in", "a.xlsx", "--quiet"]), Some(Locale::De)));
+        assert_eq!(take_locale(args(&["--locale=EN", "cat", "x"])).unwrap(), (args(&["cat", "x"]), Some(Locale::En)));
+        assert_eq!(take_locale(args(&["cat", "x"])).unwrap().1, None);
+        // `--localex` is someone else's option; a missing or unknown value is an error.
+        assert_eq!(take_locale(args(&["--localex"])).unwrap().0, args(&["--localex"]));
+        assert!(take_locale(args(&["cat", "--locale"])).is_err());
+        assert!(take_locale(args(&["--locale", "fr"])).is_err());
+    }
 
     #[test]
     fn parses_commands() {

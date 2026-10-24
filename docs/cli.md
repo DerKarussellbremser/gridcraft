@@ -20,6 +20,10 @@ Convert to `.xlsx` to save the imported workbook; ODS output is not supported.
 cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- <subcommand>
 ```
 
+`--locale de|en` may stand anywhere on the command line: values are shown and exported (PDF, HTML,
+`cat`) in that locale's conventions, `de` as Excel de-DE shows them (`1.234,56 €`, `20. Feb. 26`).
+English when not given, so scripts see the same output on every system. Formulas stay English.
+
 | Subcommand | Example |
 |---|---|
 | `info <file> [--json]` | `gridcraft-cli info book.xlsx` — sheets, used ranges, cell counts, tables, charts, names. |

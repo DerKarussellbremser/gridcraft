@@ -129,6 +129,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | `gridcraft-cli --locale de` shows and exports values in German conventions (a PDF exported from the command line printed `512.00 €` where the app prints `512,00 €`); English stays the default so scripts are unaffected (`take_locale` test, `docs/cli.md`) |
 | 2026-10-24 | minor | German date formats: an unquoted `/` shows the date separator, `.` (observed in Excel de-DE: `d/m/yyyy` is `15.10.2026`, `d/ mmm/ yy` is `15. Okt. 26`, `yyyy/mm/dd` is `2026.10.15`); a quoted or escaped `/` and a fraction bar stay |
 | 2026-10-23 | minor | German Analysis ToolPak and Solver reports: labels, titles and report sheet names follow the session locale (`report_text.rs`, one pass where each tool writes its report) |
 | 2026-10-23 | minor | German numbers and dates (`Locale::De`: separators, month and day names, de-DE built-ins, `WAHR`), German entry and editing of numbers, dates and booleans, `Mappe1`/`Tabelle1`, the `€` Accounting button, German function help for every function, and the German catalog at 1,580 labels (task panes and direct dialog labels routed through it). Observed in Excel de-DE (`crates/numfmt/src/tests.rs` `german`, `crates/ui-egui/tests/it/formula_locale.rs`) |
