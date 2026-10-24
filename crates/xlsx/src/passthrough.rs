@@ -429,7 +429,7 @@ impl KeptReader {
                     }
                     x.push_str("</externalReferences>");
                     p.elements.push(PreservedXml { slot: "externalReferences".into(), xml: x });
-                    cx.warn("links to external workbooks were kept; they are not followed or refreshed");
+                    cx.warn("links to other workbooks: the formulas use the values saved with this file until you update them (Data › Edit Links)");
                 }
                 Err(why) => cx.warn(format!("links to external workbooks were dropped: {why}")),
             }

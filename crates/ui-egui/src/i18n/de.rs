@@ -1713,6 +1713,26 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "No model credits were built into this copy." => "Diese Version enthält keine Angaben zu den verwendeten Modellen.",
         "Reverse the order" => "Reihenfolge umkehren",
         "Show" => "Anzeigen",
+        // Links to other workbooks (Data › Edit Links).
+        "Edit Links" => "Verknüpfungen bearbeiten",
+        "Edit\nLinks" => "Verknüpfungen\nbearbeiten",
+        "Source" => "Quelle",
+        "Status" => "Status",
+        "Found" => "Gefunden",
+        "Source not found" => "Quelle nicht gefunden",
+        "Change Source…" => "Quelle ändern…",
+        "Update Values" => "Werte aktualisieren",
+        "The formulas use the values saved with this workbook until you update them." => {
+            "Die Formeln verwenden die in dieser Arbeitsmappe gespeicherten Werte, bis Sie sie aktualisieren."
+        }
+        "Some sources were not found; their saved values were kept." => {
+            "Einige Quellen wurden nicht gefunden; ihre gespeicherten Werte bleiben erhalten."
+        }
+        "The values were updated." => "Die Werte wurden aktualisiert.",
+        "Automatic update of links is off: the formulas use the values saved with this workbook." => {
+            "Die automatische Aktualisierung von Verknüpfungen ist deaktiviert: Die Formeln verwenden die in dieser Arbeitsmappe gespeicherten Werte."
+        }
+        "this workbook has no links to other workbooks" => "Diese Arbeitsmappe enthält keine Verknüpfungen mit anderen Arbeitsmappen.",
         _ => return None,
     })
 }

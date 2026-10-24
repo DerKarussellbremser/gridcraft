@@ -18,7 +18,18 @@ pub(crate) fn canonical(
     {
         return Ok(stored);
     }
-    if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
+    if wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
+        return Ok(text.to_string());
+    }
+    // `'[Daten .xlsx]Kunden'!A2`, as the formula bar shows it, is `[1]Kunden!A2` in the file.
+    let numbered;
+    let text = if text.starts_with('=') && !wb.external_books.is_empty() {
+        numbered = book_names(text, locale, wb, false);
+        numbered.as_str()
+    } else {
+        text
+    };
+    if locale == FormulaLocale::En {
         return Ok(text.to_string());
     }
     // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
@@ -112,6 +123,11 @@ fn german_date(t: &str) -> Option<String> {
 }
 
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
+    let shown = display_syntax(text, locale, wb, sheet);
+    if wb.external_books.is_empty() || !shown.starts_with('=') { shown } else { book_names(&shown, locale, wb, true) }
+}
+
+fn display_syntax(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
     // English (and every language without a formula table) shows the stored text, `_xludf.`
     // prefixes aside, and skips a parse per frame.
     if locale == FormulaLocale::En {
@@ -123,6 +139,38 @@ pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: u
         .map(|body| format!("={body}"))
         .unwrap_or_else(|_| text.to_string());
     hide_udf_prefix(&shown, locale)
+}
+
+/// Swaps the `[1]` of another workbook's sheet for its file name (`show`), as Excel shows it:
+/// `[1]Kunden!A2` ↔ `'[Daten .xlsx]Kunden'!A2`. Only sheet prefixes change, never text in quotes.
+fn book_names(text: &str, locale: FormulaLocale, wb: &Workbook, show: bool) -> String {
+    let Some(body) = text.strip_prefix('=') else { return text.to_string() };
+    let Ok(tokens) = formula::lexer::tokenize_locale(body, locale) else { return text.to_string() };
+    let file = |book: &gridcraft_engine::model::ExternalBook| {
+        book.targets.first().map(|t| t.rsplit(['/', '\\']).next().unwrap_or(t).to_string()).unwrap_or_default()
+    };
+    let mut out = String::from("=");
+    let mut from = 0;
+    for t in tokens {
+        let formula::lexer::Tok::Sheet(name, None) = &t.tok else { continue };
+        let Some((inside, sheet)) = name.strip_prefix('[').and_then(|r| r.split_once(']')) else { continue };
+        let replacement = if show {
+            let Some(book) = inside.parse::<usize>().ok().and_then(|n| wb.external_books.get(n.checked_sub(1)?)) else { continue };
+            format!("'[{}]{}'!", file(book).replace('\'', "''"), sheet.replace('\'', "''"))
+        } else {
+            if inside.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let Some(n) = wb.external_books.iter().position(|b| file(b).eq_ignore_ascii_case(inside)) else { continue };
+            let numbered = format!("[{}]{sheet}", n + 1);
+            if formula::printer::needs_quotes(sheet) { format!("'{}'!", numbered.replace('\'', "''")) } else { format!("{numbered}!") }
+        };
+        out.push_str(body.get(from..t.start).unwrap_or(""));
+        out.push_str(&replacement);
+        from = t.end;
+    }
+    out.push_str(body.get(from..).unwrap_or(""));
+    out
 }
 
 /// What the editor and formula bar start from for a constant: an error value in the formula

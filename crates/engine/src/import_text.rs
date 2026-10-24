@@ -40,9 +40,10 @@ const DE: &[(&str, &str)] = &[
     ("chart sheet \"{}\" was skipped and is not kept on save", "Diagrammblatt „{}“ wurde übersprungen und beim Speichern nicht übernommen."),
     ("chart sheet \"{}\" was dropped: {}", "Diagrammblatt „{}“ wurde entfernt: {}"),
     (
-        "links to external workbooks were kept; they are not followed or refreshed",
-        "Links auf andere Arbeitsmappen bleiben erhalten, werden aber weder verfolgt noch aktualisiert.",
+        "links to other workbooks: the formulas use the values saved with this file until you update them (Data › Edit Links)",
+        "Verknüpfungen mit anderen Arbeitsmappen: Die Formeln verwenden die in dieser Datei gespeicherten Werte, bis Sie sie aktualisieren (Daten › Verknüpfungen bearbeiten).",
     ),
+    ("{} items in this file were handled differently. First: {}", "Zu {} Punkten dieser Datei gibt es Hinweise. Der erste: {}"),
     ("links to external workbooks were dropped: {}", "Links auf andere Arbeitsmappen wurden entfernt: {}"),
     ("macros (VBA project) were kept but not executed", "Makros (VBA-Projekt) bleiben erhalten, werden aber nicht ausgeführt."),
     (
@@ -244,7 +245,7 @@ const DE: &[(&str, &str)] = &[
 ];
 
 /// `text` in `loc`; `None` keeps it (English, or a note this table doesn't know).
-pub(crate) fn localize(loc: Locale, text: &str) -> Option<String> {
+pub fn localize(loc: Locale, text: &str) -> Option<String> {
     if loc == Locale::En {
         return None;
     }
@@ -294,8 +295,8 @@ mod tests {
             )
         );
         assert_eq!(
-            de("links to external workbooks were kept; they are not followed or refreshed").as_deref(),
-            Some("Links auf andere Arbeitsmappen bleiben erhalten, werden aber weder verfolgt noch aktualisiert.")
+            de("2 items in this file were handled differently. First: no styles part").as_deref(),
+            Some("Zu 2 Punkten dieser Datei gibt es Hinweise. Der erste: no styles part")
         );
         // A sheet name containing the template's own words still matches as a whole.
         assert_eq!(de("sheet \"a: b\" could not be read: bad zip").as_deref(), Some("Blatt „a: b“ konnte nicht gelesen werden: bad zip"));

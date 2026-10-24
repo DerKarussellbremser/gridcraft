@@ -197,6 +197,58 @@ pub struct Workbook {
     /// regional setting, never part of the file. Not in JSON.
     #[serde(skip)]
     pub locale: gridcraft_core::Locale,
+    /// Other workbooks the formulas read from (`[1]Kunden!A2` is the first), with the values
+    /// last read from them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_books: Vec<ExternalBook>,
+}
+
+/// A workbook that formulas refer to as `[n]Sheet!A1`: where it is, and the values last read
+/// from it (Excel saves them in the file, so the formulas work without the other workbook).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExternalBook {
+    /// Where it was saved: the relative path first (`Daten .xlsx`), then the absolute one.
+    pub targets: Vec<String>,
+    pub sheets: Vec<ExternalSheet>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExternalSheet {
+    pub name: String,
+    /// The cached values, sorted by row then column.
+    pub cells: Vec<(gridcraft_core::CellRef, gridcraft_core::Value)>,
+}
+
+impl ExternalSheet {
+    /// The values of `range`, row by row; cells without a cached value are empty.
+    pub fn range_values(&self, range: gridcraft_core::RangeRef) -> Vec<gridcraft_core::Value> {
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        let mut out = vec![gridcraft_core::Value::Empty; h * w];
+        let first = self.cells.partition_point(|(c, _)| c.row < range.start.row);
+        for (c, v) in self.cells.get(first..).unwrap_or(&[]).iter().take_while(|(c, _)| c.row <= range.end.row) {
+            if (range.start.col..=range.end.col).contains(&c.col)
+                && let Some(slot) = out.get_mut((c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize)
+            {
+                *slot = v.clone();
+            }
+        }
+        out
+    }
+    /// The last row and column holding a value (a whole-column reference stops there).
+    pub fn used_end(&self) -> Option<gridcraft_core::CellRef> {
+        let row = self.cells.last()?.0.row;
+        let col = self.cells.iter().map(|(c, _)| c.col).max()?;
+        Some(gridcraft_core::CellRef::new(row, col))
+    }
+}
+
+impl Workbook {
+    /// The external sheet a formula names `[n]Sheet` (`n` counts from 1), if it is cached.
+    pub fn external_sheet(&self, name: &str) -> Option<&ExternalSheet> {
+        let (n, sheet) = name.strip_prefix('[')?.split_once(']')?;
+        let book = self.external_books.get(n.parse::<usize>().ok()?.checked_sub(1)?)?;
+        book.sheets.iter().find(|s| s.name.eq_ignore_ascii_case(sheet))
+    }
 }
 
 fn is_all(s: &ShowObjects) -> bool {
@@ -233,6 +285,7 @@ impl Workbook {
             source_dir: None,
             source_path: None,
             locale: gridcraft_core::Locale::En,
+            external_books: vec![],
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {

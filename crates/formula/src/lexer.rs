@@ -62,6 +62,25 @@ fn is_range_end(w: &str) -> bool {
     letters.len() <= 3 && if digits.is_empty() { !letters.is_empty() && rest.is_empty() } else { digits.bytes().all(|b| b.is_ascii_digit()) }
 }
 
+/// Length of an unquoted external sheet prefix at `i`, `[1]Kunden!` (with the `!`), if there
+/// is one. The quoted form `'[1]Kunden Liste'!` is an ordinary quoted sheet name.
+fn external_sheet_len(chars: &[(usize, char)], i: usize) -> Option<usize> {
+    let ch = |k: usize| chars.get(k).map(|c| c.1);
+    let mut j = i + 1;
+    while ch(j).is_some_and(|c| c.is_ascii_digit()) {
+        j += 1;
+    }
+    if j == i + 1 || ch(j) != Some(']') {
+        return None;
+    }
+    let start = j + 1;
+    let mut k = start;
+    while ch(k).is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.')) {
+        k += 1;
+    }
+    (k > start && ch(k) == Some('!')).then_some(k + 1 - i)
+}
+
 /// Whether `c` can start the second end of a range after `:.` (`A1:.E10`, `A:.$C`, `1:.5`).
 fn starts_range_end(c: Option<char>) -> bool {
     c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '$')
@@ -167,6 +186,13 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 let len = t.chars().count();
                 // `#REF!A1` style is not valid; `#REF!` is an error literal.
                 push(&mut out, Tok::Error(e), i + len);
+                i += len;
+            }
+            '[' if external_sheet_len(&chars, i).is_some() => {
+                // A sheet of another workbook, `[1]Kunden!`: its name keeps the `[1]`.
+                let len = external_sheet_len(&chars, i).unwrap_or(0);
+                let name = src.get(pos_of(i)..pos_of(i + len - 1)).unwrap_or("").to_string();
+                push(&mut out, Tok::Sheet(name, None), i + len);
                 i += len;
             }
             '[' => {

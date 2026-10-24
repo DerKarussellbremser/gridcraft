@@ -2053,6 +2053,13 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
+    // Links to other workbooks: their files, and reading their values again.
+    let has_links = app.session.active().is_some_and(|d| !d.wb.external_books.is_empty());
+    let el = ui.add_enabled_ui(has_links, |ui| big_button(ui, Icon::Link, "Edit\nLinks", "Edit Links", false)).inner;
+    control_keytip(app, ui, &el, "dialog:editLinks");
+    if el.clicked() {
+        app.open_dialog("editLinks", json!({}));
+    }
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);

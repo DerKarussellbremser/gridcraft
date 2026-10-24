@@ -173,6 +173,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     {
         wb.theme = crate::theme::read_theme(&x);
     }
+    // The values of linked workbooks, so `[1]Kunden!A2` evaluates without them.
+    wb.external_books = crate::external::read(&mut cx, &wb_xml, &wb_rels);
     // Shared strings, streamed item by item. Phonetic (furigana) runs are kept next to the text
     // they annotate, so an open + save does not delete them.
     if let Some(r) = find_rel(&wb_rels, "sharedStrings").cloned() {

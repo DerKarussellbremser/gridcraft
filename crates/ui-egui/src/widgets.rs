@@ -513,21 +513,28 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
                 border,
             );
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(&notice.text).font(theme::ui_font(12.5)).color(t.text));
+            ui.label(egui::RichText::new(app.ui.language.tr_error(&notice.text)).font(theme::ui_font(12.5)).color(t.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
                     dismiss = true;
                 }
                 if let Some((label, dialog)) = &notice.action
-                    && ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked()
+                    && ui.button(egui::RichText::new(app.ui.language.tr(label)).font(theme::ui_font(12.5))).clicked()
                 {
                     action = Some((label.clone(), dialog.clone()));
                 }
             });
         });
     });
+    // An action is a dialog to open, or `cmd:` a command to run (the bar closes when it worked).
     if let Some((_, dialog)) = action {
-        app.open_dialog(&dialog, serde_json::json!({}));
+        match dialog.strip_prefix("cmd:") {
+            Some(id) => match app.run(id, serde_json::json!({})) {
+                Ok(_) => dismiss = true,
+                Err(e) => app.toast = Some((e, crate::now_ms())),
+            },
+            None => app.open_dialog(&dialog, serde_json::json!({})),
+        }
     }
     if dismiss {
         app.notice = None;

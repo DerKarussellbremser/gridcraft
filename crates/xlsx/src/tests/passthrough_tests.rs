@@ -201,6 +201,42 @@ fn sheet_part(u: &Unpacked, sheet: &str) -> String {
     u.target("xl/workbook.xml", &id).1
 }
 
+/// A link's cached values and its target are read, so `[1]Sheet1!A1` evaluates without the file.
+#[test]
+fn linked_workbooks_bring_their_cached_values() {
+    let (wb, _) = read_xlsx(&rich_package()).unwrap();
+    let book = wb.external_books.first().expect("one linked workbook");
+    assert_eq!(book.targets, ["C:/never/opened/Book2.xlsx"]);
+    let sheet = wb.external_sheet("[1]Sheet1").expect("its sheet");
+    assert_eq!(sheet.cells, [(gridcraft_core::CellRef::new(0, 0), gridcraft_core::Value::number(7.0))]);
+    assert!(wb.external_sheet("[2]Sheet1").is_none());
+}
+
+/// Updated link values and a changed source are saved, so the next open (here or in Excel)
+/// sees them; the rest of the link part stays as it was.
+#[test]
+fn updated_link_values_and_source_are_saved() {
+    let (mut wb, _) = read_xlsx(&rich_package()).unwrap();
+    let book = wb.external_books.first_mut().unwrap();
+    book.targets = vec!["C:\\Daten\\Kunden neu.xlsx".into()];
+    book.sheets[0].cells = vec![
+        (gridcraft_core::CellRef::new(0, 0), gridcraft_core::Value::number(8.5)),
+        (gridcraft_core::CellRef::new(1, 1), gridcraft_core::Value::text("a <b>")),
+    ];
+    let (back, rep) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
+    let book = back.external_books.first().unwrap();
+    assert_eq!(book.targets, ["C:\\Daten\\Kunden neu.xlsx"]);
+    assert_eq!(
+        book.sheets[0].cells,
+        [
+            (gridcraft_core::CellRef::new(0, 0), gridcraft_core::Value::number(8.5)),
+            (gridcraft_core::CellRef::new(1, 1), gridcraft_core::Value::text("a <b>"))
+        ]
+    );
+    assert_eq!(book.sheets[0].name, "Sheet1");
+}
+
 #[test]
 fn unmodelled_parts_survive_a_round_trip() {
     let (wb, rep) = read_xlsx(&rich_package()).unwrap();

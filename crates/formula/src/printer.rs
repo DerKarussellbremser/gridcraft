@@ -11,7 +11,12 @@ pub use gridcraft_core::{quote_sheet, sheet_needs_quotes as needs_quotes};
 fn sheet_prefix(s: &SheetSel) -> String {
     match s {
         SheetSel::Current => String::new(),
-        SheetSel::Named(n) => format!("{}!", quote_sheet(n)),
+        // Another workbook's sheet, `[1]Kunden!`, is written as Excel writes it: the `[1]` never
+        // forces quotes, only the sheet name can (`'[1]Kunden Liste'!`).
+        SheetSel::Named(n) => match n.strip_prefix('[').and_then(|r| r.split_once(']')) {
+            Some((book, sheet)) if !book.is_empty() && book.bytes().all(|b| b.is_ascii_digit()) && !needs_quotes(sheet) => format!("{n}!"),
+            _ => format!("{}!", quote_sheet(n)),
+        },
         SheetSel::Span(a, b) => {
             let joined = format!("{a}:{b}");
             if needs_quotes(a) || needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }

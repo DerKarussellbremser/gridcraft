@@ -218,6 +218,15 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         return Err(IoError::Format("a static cell picture cannot also contain a formula".into()));
     }
     check_sheet_names(wb)?;
+    // Links to other workbooks are saved with their current values (and source).
+    let linked;
+    let wb = match crate::external::with_current_links(wb) {
+        Some(w) => {
+            linked = w;
+            &linked
+        }
+        None => wb,
+    };
     let mut out = Out {
         parts: vec![],
         overrides: vec![],

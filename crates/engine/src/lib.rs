@@ -13,7 +13,7 @@ mod clip_html;
 pub mod cmd;
 pub mod display;
 pub mod fill;
-mod import_text;
+pub mod import_text;
 pub mod io;
 pub mod links;
 pub mod outline;

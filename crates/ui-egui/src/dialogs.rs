@@ -801,6 +801,11 @@ impl Dialog {
                 d.result = app.session.run("view.macros", json!({})).ok();
                 d
             }
+            "editLinks" => {
+                let mut d = Dialog::custom("editLinks", "Edit Links", json!({}));
+                d.result = app.session.run("data.editLinks", json!({})).ok();
+                d
+            }
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
                 d.result = app.session.run("review.workbookStatistics", json!({})).ok();
@@ -1148,7 +1153,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" | "editLinks" => 520.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -1208,6 +1213,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                 }
                 "macros" => macros(app, ui, &mut d),
+                "editLinks" => edit_links(app, ui, &mut d),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
                         app.session.active().and_then(|doc| doc.wb.active().map(|s| json!(s.comments.iter().map(|(c, m)| json!({"cell": c.a1(), "author": m.author, "text": m.text})).collect::<Vec<_>>())))
@@ -1753,6 +1759,54 @@ fn about(ui: &mut egui::Ui, d: &mut Dialog) {
 /// The Macros dialog: lists GridCraft's own recorded scripts and (if the file carries one) the
 /// preserved VBA project. Mirrors Excel's Developer ▸ Macros list, but is honest that VBA is
 /// preserved and not executed.
+/// Data › Edit Links: each linked workbook, whether its file is found here, and buttons to read
+/// its values again or link to another file. Nothing is read until a button is pressed.
+fn edit_links(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+    let lang = crate::i18n::current(ui.ctx());
+    let books: Vec<Json> = d.result.as_ref().and_then(Json::as_array).cloned().unwrap_or_default();
+    let mut outcome: Option<Result<Json, String>> = None;
+    egui::Grid::new("edit_links").num_columns(3).spacing(vec2(12.0, 6.0)).striped(true).show(ui, |ui| {
+        ui.strong(lang.tr("Source"));
+        ui.strong(lang.tr("Status"));
+        ui.label("");
+        ui.end_row();
+        for b in &books {
+            let n = b.get("book").and_then(Json::as_u64).unwrap_or(1);
+            let source = b.get("source").and_then(Json::as_str).unwrap_or("");
+            let name = source.rsplit(['/', '\\']).next().unwrap_or(source);
+            ui.label(name).on_hover_text(source);
+            match b.get("path").and_then(Json::as_str) {
+                Some(path) => ui.label(lang.tr("Found")).on_hover_text(path),
+                None => ui.colored_label(Color32::from_rgb(0xC0, 0x39, 0x2B), lang.tr("Source not found")),
+            };
+            if let Some(pick) = &app.services.pick_open
+                && ui.button(lang.tr("Change Source…")).clicked()
+                && let Some(path) = pick()
+            {
+                outcome = Some(app.run("data.changeLinkSource", json!({"book": n, "path": path})));
+            }
+            ui.end_row();
+        }
+    });
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(lang.tr("The formulas use the values saved with this workbook until you update them.")).small());
+    ui.add_space(4.0);
+    if ui.button(lang.tr("Update Values")).clicked() {
+        outcome = Some(app.run("data.updateLinks", json!({})));
+    }
+    if let Some(r) = outcome {
+        let message = match &r {
+            Ok(v) if v["missing"].as_array().is_some_and(|m| !m.is_empty()) => {
+                lang.tr("Some sources were not found; their saved values were kept.").to_string()
+            }
+            Ok(_) => lang.tr("The values were updated.").to_string(),
+            Err(e) => lang.tr_error(e),
+        };
+        app.toast = Some((message, crate::now_ms()));
+        d.result = app.session.run("data.editLinks", json!({})).ok();
+    }
+}
+
 fn macros(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     ui.label(
         crate::i18n::current(ui.ctx())

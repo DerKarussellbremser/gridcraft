@@ -865,7 +865,13 @@ impl SheetApp {
             return;
         }
         let vba: Vec<&str> = msgs.iter().copied().filter(|m| m.to_lowercase().contains("macro") || m.contains("VBA")).collect();
-        if !vba.is_empty() {
+        // Links to other workbooks are never read on open, as in Excel: say so, and offer it.
+        let links = self.session.active().is_some_and(|d| !d.wb.external_books.is_empty());
+        if links && vba.is_empty() {
+            let text = "Automatic update of links is off: the formulas use the values saved with this workbook.";
+            self.notice =
+                Some(Notice { text: text.into(), kind: NoticeKind::Warning, action: Some(("Update Values".into(), "cmd:data.updateLinks".into())) });
+        } else if !vba.is_empty() {
             // The reader says "dropped" when the VBA project was missing or unreadable; never promise to keep it then.
             let dropped = vba.iter().any(|m| m.contains("dropped"));
             let text = if dropped {
@@ -875,10 +881,13 @@ impl SheetApp {
             };
             self.notice = Some(Notice { text: text.into(), kind: NoticeKind::Warning, action: Some(("What this means".into(), "macros".into())) });
         } else {
+            // The readers' notes in the session's language.
+            let loc = self.session.locale;
+            let local = |m: &str| gridcraft_engine::import_text::localize(loc, m).unwrap_or_else(|| m.to_string());
             let text = if msgs.len() == 1 {
-                msgs[0].to_string()
+                local(msgs[0])
             } else {
-                format!("{} items in this file were handled differently. First: {}", msgs.len(), msgs[0])
+                local(&format!("{} items in this file were handled differently. First: {}", msgs.len(), local(msgs[0])))
             };
             self.notice = Some(Notice { text, kind: NoticeKind::Info, action: None });
         }

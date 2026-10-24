@@ -168,6 +168,30 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// `[1]Kunden!A2:O4914`: the values last read from the other workbook, as a value (it has no
+    /// cells here). A sheet that isn't cached is `#REF!`, as in Excel without the cached values.
+    fn external_ref(&self, r: &Reference) -> Ev {
+        let Some(sheet) = r.sheet_name().and_then(|n| self.host.workbook().external_sheet(n)) else { return err(CellError::Ref) };
+        let mut range = r.range();
+        // `A:A` and `1:1` stop at the last cached value.
+        if range.end.row == MAX_ROWS - 1 || range.end.col == MAX_COLS - 1 {
+            let Some(end) = sheet.used_end() else { return Ev::V(Value::Empty) };
+            range = RangeRef::new(
+                range.start,
+                CellRef::new(range.end.row.min(end.row.max(range.start.row)), range.end.col.min(end.col.max(range.start.col))),
+            );
+        }
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        if (h as u64) * (w as u64) > MAX_CELLS {
+            return err(CellError::Num);
+        }
+        let mut data = sheet.range_values(range);
+        if h * w == 1 {
+            return Ev::V(data.pop().unwrap_or(Value::Empty));
+        }
+        Ev::V(Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value)))
+    }
+
     pub fn reference_areas(&self, r: &Reference) -> Result<Vec<Area>, CellError> {
         let range = r.range();
         Ok(self.resolve_sheet(&r.sheet)?.into_iter().map(|sheet| Area { sheet, range }).collect())
@@ -263,6 +287,7 @@ impl<'h> Evaluator<'h> {
                 }
                 Ev::V(Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value)))
             }
+            Expr::Ref(r) if r.sheet_name().is_some_and(|n| n.starts_with('[')) => self.external_ref(r),
             Expr::Ref(r) => match self.reference_areas(r) {
                 Ok(a) => Ev::R(a),
                 Err(x) => err(x),

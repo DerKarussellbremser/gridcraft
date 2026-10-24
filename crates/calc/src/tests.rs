@@ -33,6 +33,33 @@ impl T {
     }
 }
 
+/// `[1]Kunden!…` reads the values cached from the other workbook, as Excel does with it closed.
+#[test]
+fn external_workbook_references_use_the_cached_values() {
+    use gridcraft_model::{ExternalBook, ExternalSheet};
+    let mut t = T::new();
+    let kunden = ExternalSheet {
+        name: "Kunden".into(),
+        cells: vec![
+            (c("A2"), Value::number(100.0)),
+            (c("C2"), Value::text("Frank")),
+            (c("A3"), Value::number(200.0)),
+            (c("C3"), Value::text("Heinz")),
+        ],
+    };
+    t.wb.external_books = vec![ExternalBook { targets: vec!["Daten .xlsx".into()], sheets: vec![kunden] }];
+    t.set("E24", "200");
+    t.set("A13", "=IF($E$24,VLOOKUP($E$24,[1]Kunden!$A$2:$O$4914,3),)");
+    assert_eq!(t.get("A13"), Value::text("Heinz"));
+    t.set("E24", "100");
+    assert_eq!(t.get("A13"), Value::text("Frank"), "a new customer number looks up again");
+    t.set("B1", "=SUM([1]Kunden!A:A)+COUNTA('[1]Kunden'!C2:C3)");
+    assert_eq!(t.num("B1"), 302.0);
+    t.set("B2", "=[1]Missing!A1");
+    t.set("B3", "=[2]Kunden!A2");
+    assert_eq!((t.get("B2"), t.get("B3")), (Value::Error(CellError::Ref), Value::Error(CellError::Ref)));
+}
+
 #[test]
 fn spill_range_operator() {
     let mut t = T::new();

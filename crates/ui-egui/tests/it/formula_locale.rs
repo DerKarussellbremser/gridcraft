@@ -328,3 +328,26 @@ fn german_default_names() {
     app.run("app.language.set", json!({"language":"en"})).unwrap();
     assert_eq!(names(&app), ("Mappe2".to_string(), vec!["Tabelle1".to_string()]), "a workbook with data keeps its names");
 }
+
+/// Another workbook's sheet shows by its file name, as in Excel, and is `[1]` in the file.
+#[test]
+fn linked_workbooks_show_by_file_name() {
+    use gridcraft_engine::model::{ExternalBook, ExternalSheet};
+    for language in ["en", "de"] {
+        let mut app = app();
+        app.run("app.language.set", json!({"language": language})).unwrap();
+        let kunden = ExternalSheet { name: "Kunden".into(), cells: vec![(CellRef::new(1, 0), Value::number(7.0))] };
+        let d = app.session.active_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        wb.external_books = vec![ExternalBook { targets: vec!["/Volumes/SYS/Daten .xlsx".into()], sheets: vec![kunden] }];
+        d.wb = std::sync::Arc::new(wb);
+        assert!(enter(&mut app, "='[Daten .xlsx]Kunden'!A2+LEN(\"[1]Kunden!\")"), "{language}");
+        assert_eq!(formula(&app), "[1]Kunden!A2+LEN(\"[1]Kunden!\")", "{language}");
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::number(17.0));
+        app.begin_edit(None, false);
+        let shown = app.editor.as_ref().unwrap().text.clone();
+        assert!(shown.starts_with("='[Daten .xlsx]Kunden'!A2+"), "{language}: {shown}");
+        assert!(shown.contains("\"[1]Kunden!\""), "text in quotes stays: {shown}");
+        app.cancel_edit();
+    }
+}
