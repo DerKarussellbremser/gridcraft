@@ -1283,7 +1283,7 @@ pub(crate) fn paint_quadrant(
         } else {
             sh.rich_spans(c).filter(|spans| spans.iter().map(|(s, _)| *s).collect::<String>() == text)
         };
-        let bold_dx = if rich.is_some() { 0.0 } else { bold_dx };
+        let bold_dx = |size: f32| if rich.is_some() { 0.0 } else { bold_dx(size) };
         // Rotated text wraps along its own direction (below), not across the column width.
         if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
