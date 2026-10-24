@@ -362,3 +362,25 @@ fn a_full_page_records_no_more_than_its_pdf_draws() {
     p.restore();
     assert_eq!(p.ops().len(), before, "what the PDF leaves out, the preview doesn't show");
 }
+
+#[test]
+fn a_recording_page_keeps_pictures_up_to_a_budget() {
+    let mut doc = PdfDoc::recording();
+    let p = doc.add_page(595.0, 842.0);
+    // 300 × 300 pixels are 360 kB of RGBA: two fit the test budget of 1 MiB, the third is outlined.
+    let pic = vec![255u8; 300 * 300 * 4];
+    for _ in 0..3 {
+        p.image_rgba(0.0, 0.0, 10.0, 10.0, &pic, 300, 300);
+    }
+    let images = p.ops().iter().filter(|o| matches!(o, Op::Image { .. })).count();
+    assert_eq!(images, 2);
+    assert!(matches!(p.ops().last(), Some(Op::StrokeRect { .. })), "the third shows where it is");
+    // An ordinary document has no such budget.
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(595.0, 842.0);
+    for _ in 0..3 {
+        p.image_rgba(0.0, 0.0, 10.0, 10.0, &pic, 300, 300);
+    }
+    let pdf = doc.finish();
+    assert!(pdf.windows(4).any(|w| w == b"/Im3"), "all three pictures are in the PDF");
+}

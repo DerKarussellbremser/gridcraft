@@ -418,7 +418,18 @@ pub struct Page {
     depth: u32,
     /// What the page draws, when its document records.
     ops: Option<Vec<Op>>,
+    /// The picture bytes a recording page holds so far (see [`MAX_RECORDED_IMAGE_BYTES`]).
+    recorded_image_bytes: usize,
 }
+
+/// Most picture bytes (RGBA) a recording page keeps, with its own PDF copies of them; past it a
+/// picture is recorded as an outline only, so a workbook full of large pictures can't exhaust
+/// memory through a preview. Ordinary documents are not limited by it.
+#[cfg(not(test))]
+const MAX_RECORDED_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+/// Small in tests, so the budget can be reached without hundreds of megabytes.
+#[cfg(test)]
+const MAX_RECORDED_IMAGE_BYTES: usize = 1024 * 1024;
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
 /// exhausting memory).
@@ -715,9 +726,20 @@ impl Page {
             return;
         }
         let px = px as usize;
-        if self.ops.is_some() && !self.full() {
-            let rgba: Arc<[u8]> = rgba.get(..px * 4).unwrap_or(rgba).into();
-            self.rec(Op::Image { x, y, w, h, rgba, pw, ph });
+        if let Some(ops) = &self.ops {
+            let bytes = px * 4;
+            let room = ops.len() < MAX_PAGE_OPS && self.recorded_image_bytes.saturating_add(bytes) <= MAX_RECORDED_IMAGE_BYTES;
+            if !room {
+                // Over the budget: the picture's place is outlined, and neither the preview nor
+                // the recording document's PDF copies its pixels.
+                self.rec(Op::StrokeRect { x, y, w, h, width: 0.5, color: [160, 160, 160] });
+                return;
+            }
+            if !self.full() {
+                self.recorded_image_bytes += bytes;
+                let rgba: Arc<[u8]> = rgba.get(..bytes).unwrap_or(rgba).into();
+                self.rec(Op::Image { x, y, w, h, rgba, pw, ph });
+            }
         }
         let mut rgb = Vec::with_capacity(px * 3);
         let mut alpha = Vec::with_capacity(px);
@@ -829,6 +851,7 @@ impl PdfDoc {
             links: Vec::new(),
             depth: 0,
             ops: self.record.then(Vec::new),
+            recorded_image_bytes: 0,
         });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
