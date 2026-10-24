@@ -61,12 +61,11 @@ pub fn paint(p: &Painter, rect: Rect, page: &Arc<PreviewPage>, ctx: &egui::Conte
             Op::Line { pts, width, color, dash } => {
                 let points: Vec<Pos2> = pts.iter().map(|q| at(q[0], q[1])).collect();
                 let s = stroke(*width, *color);
-                let on = dash.first().copied().unwrap_or(0.0) * k;
-                let off = dash.get(1).copied().unwrap_or(on / k.max(f32::EPSILON)) * k;
-                if on > 0.5 && off > 0.5 {
-                    pc.extend(Shape::dashed_line(&points, s, on, off));
-                } else {
-                    pc.add(Shape::line(points, s));
+                match dash_pattern(dash, k) {
+                    Some((dashes, gaps)) => pc.extend(Shape::dashed_line_with_offset(&points, s, &dashes, &gaps, 0.0)),
+                    None => {
+                        pc.add(Shape::line(points, s));
+                    }
                 }
             }
             Op::Polygon { pts, fill, stroke: line } => {
@@ -100,6 +99,18 @@ pub fn paint(p: &Painter, rect: Rect, page: &Arc<PreviewPage>, ctx: &egui::Conte
             }
         }
     }
+}
+
+/// A PDF dash array (`[on, off, on, off, …]` in points; an odd one repeats, as in PDF) as the
+/// dash and gap lengths egui cycles through, scaled by `k`; `None` (draw solid) when there is none
+/// or a part would be too short to see.
+fn dash_pattern(dash: &[f32], k: f32) -> Option<(Vec<f32>, Vec<f32>)> {
+    let times = if dash.len() % 2 == 1 { 2 } else { 1 };
+    let all: Vec<f32> = dash.iter().cycle().take(dash.len() * times).map(|d| d * k).collect();
+    if all.is_empty() || all.iter().any(|d| d.is_nan() || *d <= 0.25) {
+        return None;
+    }
+    Some((all.iter().step_by(2).copied().collect(), all.iter().skip(1).step_by(2).copied().collect()))
 }
 
 /// A picture's texture, scaled down when it is larger than the GPU takes.
@@ -144,4 +155,20 @@ fn text(p: &Painter, t: &TextOp, origin: Pos2, k: f32) {
         p.add(TextShape::new(pos + vec2(bold_dx * cos, bold_dx * sin), galley.clone(), color).with_angle(t.angle));
     }
     p.add(TextShape::new(pos, galley, color).with_angle(t.angle));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_whole_dash_pattern_is_replayed() {
+        // Dash-dot: dash 4, gap 1.5, dot 1, gap 1.5, at twice the size.
+        assert_eq!(dash_pattern(&[4.0, 1.5, 1.0, 1.5], 2.0), Some((vec![8.0, 2.0], vec![3.0, 3.0])));
+        // An odd array repeats, as in PDF: [3] is dash 3, gap 3.
+        assert_eq!(dash_pattern(&[3.0], 1.0), Some((vec![3.0], vec![3.0])));
+        assert_eq!(dash_pattern(&[], 1.0), None, "solid");
+        assert_eq!(dash_pattern(&[4.0, 0.0], 1.0), None, "a part too short to see draws solid");
+        assert_eq!(dash_pattern(&[4.0, f32::NAN], 1.0), None);
+    }
 }
