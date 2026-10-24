@@ -40,6 +40,15 @@ pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
 pub use selection::Selection;
 
+/// Prints new sheets, and sheets whose file has no page setup, on the system region's paper (A4,
+/// Letter in the US…), as Excel takes the printer's default. Called once at start-up by the apps;
+/// without it (tests, embedders) that paper is Letter.
+pub fn use_system_paper() {
+    if let Some(paper) = sys_locale::get_locale().as_deref().and_then(gridcraft_model::paper_for_locale) {
+        gridcraft_model::set_default_paper(paper);
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     #[error("unknown command `{0}`")]
