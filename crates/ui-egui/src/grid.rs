@@ -1247,7 +1247,9 @@ pub(crate) fn paint_quadrant(
         let font = FontId::new(size, fam);
         let slant = st.font.italic && crate::fonts::is_slanted(&st.font.name, st.font.bold);
         let embolden = st.font.bold && crate::fonts::is_emboldened(&st.font.name, st.font.italic);
-        let bold_dx = if embolden { (size / 36.0).max(1.0 / p.ctx().pixels_per_point()) } else { 0.0 };
+        // How far the second impression of imitated bold sits from the first, by the size painted.
+        let ppp = p.ctx().pixels_per_point();
+        let bold_dx = |size: f32| if embolden { (size / 36.0).max(1.0 / ppp) } else { 0.0 };
         // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
         let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
         let avail_w = rect.right() - text_left;
@@ -1301,7 +1303,7 @@ pub(crate) fn paint_quadrant(
                 _ => text_left + pad + indent,
             };
             let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
-            paint_cell_galley(&p.with_clip_rect(rect.intersect(p.clip_rect())), pos2(x, y), galley, color, bold_dx);
+            paint_cell_galley(&p.with_clip_rect(rect.intersect(p.clip_rect())), pos2(x, y), galley, color, bold_dx(size));
             continue;
         }
         // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -1412,11 +1414,18 @@ pub(crate) fn paint_quadrant(
                 galley.clone()
             };
             let pos = rotated_text_pos(*rect, galley.size(), angle, painted_halign(st.align.h, geo.rtl), st.align.v, pad, indent);
+            // Imitated bold: the second impression along the text's own direction.
+            let d = bold_dx(font.size);
+            if d > 0.0 {
+                let mut thick = egui::epaint::TextShape::new(pos + d * egui::vec2(angle.cos(), angle.sin()), galley.clone(), color);
+                thick.angle = angle;
+                cp.add(thick);
+            }
             let mut shape = egui::epaint::TextShape::new(pos, galley, color);
             shape.angle = angle;
             cp.add(shape);
         } else {
-            paint_cell_galley(&cp, pos2(x, y), galley.clone(), color, bold_dx);
+            paint_cell_galley(&cp, pos2(x, y), galley.clone(), color, bold_dx(font.size));
         }
         let baseline = y + gh * 0.82;
         // Rich text carries its own underline and strikeout per run.

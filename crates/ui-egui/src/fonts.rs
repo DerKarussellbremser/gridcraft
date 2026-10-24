@@ -326,13 +326,9 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
     for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
         let Some(primary) = pick_face(faces, bold, italic) else { continue };
         let role = role_key(family, bold, italic);
-        if italic && !primary.italic {
-            mark_synthetic(&role, SLANT);
-        }
-        if bold && pick_face(faces, false, italic).is_some_and(|plain| face_key(plain) == face_key(primary)) {
-            mark_synthetic(&role, BOLD);
-        }
         let mut chain: Vec<String> = Vec::new();
+        // The face the role's text is actually drawn in: the first one whose file could be read.
+        let mut drawn: Option<&Face> = None;
         for face in [Some(primary), pick_face(faces, false, false)] {
             let Some(face) = face else { continue };
             let key = face_key(face);
@@ -346,10 +342,14 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
                 fonts.font_data.insert(key.clone(), std::sync::Arc::new(fd));
             }
             chain.push(key);
+            drawn.get_or_insert(face);
         }
-        if chain.is_empty() {
-            continue;
-        }
+        let Some(drawn) = drawn else { continue };
+        // Imitate what the drawn face lacks: italic when it is upright; bold when it is the family's
+        // plain face (the family has no bold of its own, or the bold file couldn't be read).
+        let own_bold = pick_face(faces, false, italic).is_none_or(|plain| face_key(plain) != face_key(primary));
+        set_synthetic(&role, SLANT, italic && !drawn.italic);
+        set_synthetic(&role, BOLD, bold && (face_key(drawn) != face_key(primary) || !own_bold));
         chain.extend(base.iter().cloned());
         fonts.families.insert(egui::FontFamily::Name(role.clone().into()), chain);
         bound.push(role);
@@ -391,8 +391,14 @@ fn synthetic() -> &'static std::sync::RwLock<HashSet<String>> {
     SYNTHETIC.get_or_init(|| std::sync::RwLock::new(HashSet::new()))
 }
 
-fn mark_synthetic(role: &str, style: &str) {
-    synthetic().write().unwrap_or_else(|e| e.into_inner()).insert(format!("{role}|{style}"));
+fn set_synthetic(role: &str, style: &str, on: bool) {
+    let mut set = synthetic().write().unwrap_or_else(|e| e.into_inner());
+    let key = format!("{role}|{style}");
+    if on {
+        set.insert(key);
+    } else {
+        set.remove(&key);
+    }
 }
 
 fn is_synthetic(role: &str, style: &str) -> bool {
@@ -530,9 +536,14 @@ mod tests {
             face("Full", "full-bi.ttf", 700.0, true),
         ];
         bound.extend(bind_faces(&mut fonts, "Full", &full));
+        // Bold and italic faces whose files can't be read: the regular face draws them, imitated.
+        let gone = |file: &str, weight: f32, italic: bool| Face { path: dir.join(file), ..face("Gone", "gone.ttf", weight, italic) };
+        let broken = [face("Gone", "gone.ttf", 400.0, false), gone("missing-b.ttf", 700.0, false), gone("missing-i.ttf", 400.0, true)];
+        bound.extend(bind_faces(&mut fonts, "Gone", &broken));
         set_bound(bound);
         assert!(is_slanted("One Face", false) && is_slanted("One Face", true));
         assert!(is_emboldened("One Face", false) && is_emboldened("One Face", true));
+        assert!(is_slanted("Gone", false) && is_emboldened("Gone", false), "the regular face stands in, imitated");
         assert!(!is_slanted("Full", false) && !is_slanted("Full", true), "its own italic faces are drawn as they are");
         assert!(!is_emboldened("Full", false) && !is_emboldened("Full", true), "its own bold faces are drawn as they are");
         assert!(!is_slanted("Not Bound", false) && !is_emboldened("Not Bound", false));
