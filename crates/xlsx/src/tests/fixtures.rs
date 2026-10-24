@@ -351,6 +351,16 @@ Check this</t></r></text></comment></commentList></comments>"#;
     assert_eq!(s.sparklines[0].kind, gridcraft_model::SparklineKind::Column);
 }
 
+/// A carriage return in a header or footer comes escaped (`_x000D_`), and goes back the same way.
+#[test]
+fn a_carriage_return_in_a_footer_is_decoded_and_saved_escaped() {
+    let body = r#"<sheetData/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><headerFooter><oddFooter>Page &amp;P_x000D_</oddFooter></headerFooter>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.footer, "Page &P\r");
+    let saved = crate::write_xlsx(&wb).unwrap();
+    assert_eq!(read_xlsx(&saved).unwrap().0.sheet(0).unwrap().print.footer, "Page &P\r");
+}
+
 /// The sheet's hyperlinks as written: cell, relationship target (external only), location.
 fn written_links(bytes: &[u8]) -> Vec<(String, Option<String>, Option<String>)> {
     let mut pkg = crate::package::Package::open(bytes).unwrap();

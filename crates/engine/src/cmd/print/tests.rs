@@ -64,6 +64,15 @@ fn header_sections_split_join_and_field_names() {
 }
 
 #[test]
+fn header_footer_lines_break_at_cr_and_lf() {
+    use header_footer::hf_lines;
+    assert_eq!(hf_lines("Thanks"), ["Thanks"]);
+    assert_eq!(hf_lines("Thanks\r"), ["Thanks", ""]);
+    assert_eq!(hf_lines("a\r\nb"), ["a", "", "b"]);
+    assert_eq!(hf_lines("a\nb"), ["a", "b"]);
+}
+
+#[test]
 fn header_footer_date_follows_the_workbook_date_system() {
     let mut wb = Workbook::new();
     let date_1900 = hf_date_time(&wb).0;
