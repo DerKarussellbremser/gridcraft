@@ -2,7 +2,7 @@
 //! ([`gridcraft_engine::cmd::print::preview_page`]): what it shows is what prints, with the cells'
 //! fonts, borders, fills, pictures, charts, headers and footers.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use egui::epaint::TextShape;
 use egui::text::LayoutJob;
@@ -17,10 +17,11 @@ pub struct PreviewPage {
     pub ops: Vec<Op>,
 }
 
-/// The textures of the page last painted, one per picture, made when first drawn.
+/// The textures of the page last painted, one per picture, made when first drawn. The page is held
+/// weakly: while it is, no later page can be allocated where it was and pass for it.
 #[derive(Default)]
 struct Textures {
-    page: usize,
+    page: Weak<PreviewPage>,
     by_op: Vec<(usize, TextureHandle)>,
 }
 
@@ -39,9 +40,9 @@ pub fn paint(p: &Painter, rect: Rect, page: &Arc<PreviewPage>, ctx: &egui::Conte
     let stroke = |w: f32, c: [u8; 3]| Stroke::new((w * k).max(0.35), rgb(c));
     let tex = textures(ctx);
     let mut tex = tex.lock().unwrap_or_else(PoisonError::into_inner);
-    let id = Arc::as_ptr(page) as usize;
-    if tex.page != id {
-        *tex = Textures { page: id, by_op: Vec::new() };
+    let this = Arc::downgrade(page);
+    if !Weak::ptr_eq(&tex.page, &this) {
+        *tex = Textures { page: this, by_op: Vec::new() };
     }
     let mut clip = rect;
     let mut saved: Vec<Rect> = Vec::new();
