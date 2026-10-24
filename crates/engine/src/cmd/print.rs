@@ -1186,7 +1186,7 @@ fn draw_text(
     }
     let mut tw = gridcraft_pdf::text_width(font, size, &text);
     // A repeat fill (`* ` in the format, as accounting formats use) stretches the text across
-    // the cell, as the grid shows it: `Arbeitswerte` at the left, `20` at the right.
+    // the cell, as the grid shows it: `Hours` at the left, `20` at the right.
     let mut filled = false;
     // The text came from the same code as `formatted` (General numbers have no fill), whose fill
     // position it refers to; `value_text_as` put one fill character there already.
@@ -1912,9 +1912,9 @@ mod tests {
             let (pdf, _) = pdf_of(&mut s, json!({}));
             pdf.windows(4).filter(|w| *w == b" l S").count()
         };
-        let short = lines("kurz");
+        let short = lines("short");
         assert!(short >= 1, "the border is drawn");
-        assert_eq!(lines("Ein langer Text, der über mehrere Zellen hinwegläuft und noch weiter"), short - 1);
+        assert_eq!(lines("A long text that runs on over several cells and further still"), short - 1);
     }
 
     /// A repeat fill (`* `) stretches the text across the cell, as on screen.
@@ -1922,11 +1922,11 @@ mod tests {
     fn repeat_fill_stretches_printed_text_across_the_cell() {
         let mut s = s();
         s.execute("cell.set", json!({"cell": "B1", "input": "20"})).unwrap();
-        s.execute("home.numberFormat", json!({"range": "B1", "code": "\"Arbeitswerte\"* 0"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B1", "code": "\"Hours\"* 0"})).unwrap();
         s.execute("home.columnWidth", json!({"cols": "B:B", "chars": 30})).unwrap();
         let (pdf, _) = pdf_of(&mut s, json!({}));
-        assert!(contains(&pdf, "(Arbeitswerte          "), "the gap is filled with spaces");
-        assert!(!contains(&pdf, "(Arbeitswerte 20)"));
+        assert!(contains(&pdf, "(Hours          "), "the gap is filled with spaces");
+        assert!(!contains(&pdf, "(Hours 20)"));
     }
 
     #[test]
