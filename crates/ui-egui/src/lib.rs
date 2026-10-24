@@ -879,8 +879,9 @@ impl SheetApp {
             return;
         }
         let vba: Vec<&str> = msgs.iter().copied().filter(|m| m.to_lowercase().contains("macro") || m.contains("VBA")).collect();
-        // Links to other workbooks are never read on open, as in Excel: say so, and offer it.
-        let links = self.session.active().is_some_and(|d| !d.wb.external_books.is_empty());
+        // Links to other workbooks aren't read on open, as in Excel, unless the workbook is trusted
+        // (its links were updated once): say so, and offer it.
+        let links = msgs.contains(&gridcraft_engine::io::LINKS_NOTE);
         if links && vba.is_empty() {
             let text = "Automatic update of links is off: the formulas use the values saved with this workbook.";
             self.notice =

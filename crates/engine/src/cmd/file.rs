@@ -89,8 +89,15 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
-    // The decrypted-workbook notice is for the info bar, not a message box.
-    let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
+    // A workbook the user trusts reads its linked files at once; once it has, its formulas no
+    // longer rest on the saved values and that note no longer applies.
+    let mut warnings = warnings;
+    if crate::cmd::ext_links::update_if_trusted(s)? {
+        warnings.retain(|w| w != crate::io::LINKS_NOTE);
+    }
+    // The decrypted-workbook and links notices are for the info bar, as in Excel, not a message
+    // box.
+    let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE && *w != crate::io::LINKS_NOTE).collect();
     if !shown.is_empty() {
         // The notes in the session's language; the command's result keeps them in English.
         let local = |t: String| crate::import_text::localize(s.locale, &t).unwrap_or(t);

@@ -42,6 +42,9 @@ use crate::read::Ctx;
 use crate::write::{NS_REL, Out, Rels, XML_DECL};
 use crate::xml::{self, esc_attr};
 
+/// The open note of a workbook linked to others: until updated, the formulas use the saved values.
+pub const LINKS_NOTE: &str = "links to other workbooks: the formulas use the values saved with this file until you update them (Data › Edit Links)";
+
 /// Most bytes kept for one workbook.
 pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
 /// Largest single kept part.
@@ -429,7 +432,7 @@ impl KeptReader {
                     }
                     x.push_str("</externalReferences>");
                     p.elements.push(PreservedXml { slot: "externalReferences".into(), xml: x });
-                    cx.warn("links to other workbooks: the formulas use the values saved with this file until you update them (Data › Edit Links)");
+                    cx.warn(LINKS_NOTE);
                 }
                 Err(why) => cx.warn(format!("links to external workbooks were dropped: {why}")),
             }

@@ -99,13 +99,43 @@ fn list(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn update(s: &mut Session, p: &Json) -> Result<Json> {
     let which = book_param(s, p, "data.updateLinks")?;
+    trust(s);
     refresh(s, which, None)
 }
 
 fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
     let path = str_param(p, "path").ok_or_else(|| bad("data.changeLinkSource", "missing `path` (the workbook to link to)"))?;
     let which = book_param(s, p, "data.changeLinkSource")?.unwrap_or(1);
+    trust(s);
     refresh(s, Some(which), Some(PathBuf::from(path)))
+}
+
+/// Most workbooks remembered as trusted; the oldest is forgotten first.
+const MAX_TRUSTED: usize = 1000;
+
+/// Updating a workbook's links trusts it, as enabling its content does in Excel (trusted
+/// documents): from then on it reads its linked files whenever it is opened.
+fn trust(s: &mut Session) {
+    let Some(path) = s.active().and_then(|d| d.path.clone()) else { return };
+    let list = &mut s.prefs.trusted_documents;
+    if !list.contains(&path) {
+        if list.len() >= MAX_TRUSTED {
+            list.remove(0);
+        }
+        list.push(path);
+    }
+}
+
+/// On open: a trusted workbook (see [`trust`]) reads its linked files at once. Returns whether
+/// every one was found and read, so its formulas no longer rest on the saved values.
+pub(crate) fn update_if_trusted(s: &mut Session) -> Result<bool> {
+    let d = s.doc()?;
+    let trusted = d.path.as_ref().is_some_and(|p| s.prefs.trusted_documents.contains(p));
+    if !trusted || d.wb.external_books.is_empty() {
+        return Ok(false);
+    }
+    let r = refresh(s, None, None)?;
+    Ok(r["missing"].as_array().is_some_and(Vec::is_empty))
 }
 
 /// `book`, checked against the workbook's links; `None` = all of them.

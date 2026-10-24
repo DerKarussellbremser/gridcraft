@@ -2393,6 +2393,51 @@ fn save_as_into_another_folder_keeps_linked_workbooks_on_the_same_file() {
     std::fs::remove_dir_all(a).unwrap();
 }
 
+/// Links work as with Excel's trusted documents: the first open keeps the saved values and says so
+/// in the info bar only (no message box); updating them trusts the workbook, which from then on
+/// reads its linked file whenever it is opened, without a note.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_trusted_workbook_reads_its_links_on_open() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-trust-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = |value: i32| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": value.to_string()})).unwrap();
+        s.execute("file.saveAs", json!({"path": dir.join("Source.xlsx")})).unwrap();
+    };
+    source(20);
+    let dest = dir.join("Dest.xlsx");
+    std::fs::write(&dest, linked_workbook("Source.xlsx")).unwrap();
+    // Message boxes about the links (the fixture's missing styles bring one of their own).
+    let messages = |s: &mut Session| {
+        s.take_ui_requests().into_iter().filter(|r| matches!(r, crate::UiRequest::Message(m) if m.contains("links to other workbooks"))).count()
+    };
+
+    let mut s = Session::new();
+    let r = s.execute("file.open", json!({"path": dest})).unwrap();
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w == crate::io::LINKS_NOTE), "the info bar's note");
+    assert_eq!(messages(&mut s), 0, "links never bring a message box");
+    assert_eq!(v(&s, "B1"), Value::Number(10.0), "the saved value");
+    s.execute("data.updateLinks", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(20.0));
+    assert_eq!(s.prefs.trusted_documents, [dest.display().to_string()]);
+
+    // Opened again later (the preferences kept), it reads the file at once.
+    source(42);
+    let prefs = s.prefs.clone();
+    let mut s = Session::new();
+    s.prefs = prefs;
+    let r = s.execute("file.open", json!({"path": dest})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(42.0));
+    assert!(!r["warnings"].as_array().unwrap().iter().any(|w| w == crate::io::LINKS_NOTE), "{r}");
+    assert_eq!(messages(&mut s), 0);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A typo like `report.cvs` must not quietly write an XLSX under that name and adopt it as the
 /// document's file.
 #[test]

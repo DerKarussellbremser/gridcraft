@@ -43,6 +43,8 @@ impl FileKind {
 pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password to open it.";
 /// The error for a wrong password contains this.
 pub const WRONG_PASSWORD: &str = "The password is incorrect.";
+/// The open note of a workbook linked to others (shown in the info bar).
+pub use gridcraft_xlsx::LINKS_NOTE;
 /// The first open warning of a workbook decrypted with its password.
 pub const DECRYPTED_NOTICE: &str = "This workbook was password-protected. GridCraft saves it without the password.";
 
