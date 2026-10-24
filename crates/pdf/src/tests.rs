@@ -318,3 +318,63 @@ fn cjk_text_is_not_replaced_by_question_marks() {
     // Measured as full-width glyphs, matching the CID font's default width.
     assert_eq!(text_width(Font::Helvetica, 10.0, "签字"), 20.0);
 }
+
+/// Hack, a monospaced TrueType face bundled with egui's default fonts (fonts are never committed).
+fn hack() -> std::sync::Arc<EmbeddedFont> {
+    EmbeddedFont::parse(epaint_default_fonts::HACK_REGULAR.into(), 0).unwrap()
+}
+
+/// The bytes of the first `/FontFile2` program in `pdf`.
+fn font_program(pdf: &[u8]) -> Vec<u8> {
+    let at = find(pdf, b"/Length1 ").unwrap() + 9;
+    let rest = std::str::from_utf8(&pdf[at..at + 20]).unwrap();
+    let len: usize = rest.split(' ').next().unwrap().parse().unwrap();
+    let start = at + find(&pdf[at..], b"stream\n").unwrap() + 7;
+    pdf[start..start + len].to_vec()
+}
+
+#[test]
+fn font_files_name_their_faces_and_map_characters() {
+    let list = faces(epaint_default_fonts::HACK_REGULAR);
+    assert_eq!(list.len(), 1);
+    assert_eq!((list[0].family.as_str(), list[0].bold, list[0].italic), ("Hack", false, false));
+    let font = hack();
+    assert!(font.glyph('A') != 0 && font.glyph('ä') != 0 && font.glyph('€') != 0);
+    assert_eq!(font.glyph('\u{10FFFD}'), 0, "a character the face lacks is the missing glyph");
+    assert!(font.covers("Grüße 12,50 €") && !font.covers("签"));
+    // Monospaced: every character advances the same.
+    let one = font.text_width(10.0, "i");
+    assert!(one > 0.0 && (font.text_width(10.0, "iWm") - 3.0 * one).abs() < 0.001);
+    // Hostile data reads as nothing, never a panic.
+    for bad in [&b""[..], b"ttcf", b"\0\x01\0\0\0\x10", &epaint_default_fonts::HACK_REGULAR[..200]] {
+        assert!(faces(bad).is_empty());
+        assert!(EmbeddedFont::parse(bad.into(), 0).is_none());
+    }
+    assert!(EmbeddedFont::parse(epaint_default_fonts::HACK_REGULAR.into(), 1).is_none(), "a plain file has one face");
+}
+
+#[test]
+fn embedded_text_carries_a_subset_font_that_reads_back() {
+    let font = hack();
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(595.0, 842.0);
+    p.text_embedded(50.0, 80.0, 12.0, &font, Synthetic::default(), [0, 0, 0], "Hallo €");
+    p.text_embedded(50.0, 100.0, 12.0, &font, Synthetic { bold: true, italic: true }, [200, 0, 0], "Hallo");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    for part in [&b"/Subtype /CIDFontType2"[..], b"/Encoding /Identity-H", b"/CIDToGIDMap /Identity", b"/FontFile2 ", b"/ToUnicode "] {
+        assert!(find(&pdf, part).is_some(), "{}", String::from_utf8_lossy(part));
+    }
+    let h = font.glyph('H');
+    assert!(find(&pdf, format!("<{h:04X}").as_bytes()).is_some(), "text is set as glyph ids");
+    assert!(find(&pdf, format!("<{h:04X}> <0048>").as_bytes()).is_some(), "ToUnicode maps H back");
+    // Imitated bold and italic: outlined and slanted by 1/3.
+    assert!(find(&pdf, b"2 Tr").is_some() && find(&pdf, b"1 0 0.333 1 ").is_some());
+    // The program is a valid font with the used outlines only, every glyph keeping its number.
+    let program = font_program(&pdf);
+    assert!(program.len() < epaint_default_fonts::HACK_REGULAR.len() / 4, "subset is {} bytes", program.len());
+    let sizes = truetype::outline_sizes(&program).unwrap();
+    assert!(sizes[h as usize] > 0 && sizes[font.glyph('€') as usize] > 0, "used outlines are kept");
+    assert_eq!(sizes[font.glyph('Z') as usize], 0, "unused outlines are left out");
+    assert!(sizes.len() > font.glyph('Z') as usize, "every glyph keeps its number");
+}

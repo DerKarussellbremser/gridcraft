@@ -1576,6 +1576,7 @@ dependencies = [
 name = "gridcraft-engine"
 version = "0.11.1"
 dependencies = [
+ "epaint_default_fonts",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
@@ -1641,6 +1642,9 @@ dependencies = [
 [[package]]
 name = "gridcraft-pdf"
 version = "0.11.1"
+dependencies = [
+ "epaint_default_fonts",
+]
 
 [[package]]
 name = "gridcraft-ui-egui"

@@ -839,12 +839,17 @@ const PAD_PX: f32 = 2.0;
 
 /// Word-wraps `text` to `width` points.
 fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    wrap_lines_by(text, &|s| gridcraft_pdf::text_width(font, size, s), width)
+}
+
+/// [`wrap_lines`] measuring with `measure` (a cell's embedded face).
+fn wrap_lines_by(text: &str, measure: &dyn Fn(&str) -> f32, width: f32) -> Vec<String> {
     let mut out = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();
         for word in para.split(' ') {
             let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if line.is_empty() || gridcraft_pdf::text_width(font, size, &cand) <= width {
+            if line.is_empty() || measure(&cand) <= width {
                 line = cand;
             } else {
                 out.push(std::mem::take(&mut line));
@@ -854,13 +859,13 @@ fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
             // search (each try measures one candidate prefix), so an over-long word costs
             // O(n log n) measurements instead of re-measuring the whole cut per character for
             // every emitted line (`a` × 100k pasted text would be cubic worst case).
-            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
+            while measure(&line) > width && line.chars().count() > 1 {
                 let chars: Vec<char> = line.chars().collect();
                 let (mut lo, mut hi) = (1usize, chars.len());
                 while lo < hi {
                     let mid = lo + (hi - lo).div_ceil(2);
                     let cut: String = chars[..mid].iter().collect();
-                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
+                    if measure(&cut) <= width {
                         lo = mid;
                     } else {
                         hi = mid - 1;
@@ -951,12 +956,50 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, x0: f32, y0: f32, x
     pg.stroke_line_dashed(x0, y0, x1, y1, lw, color, &border_dash(b.style, k));
 }
 
-fn font_for(style: &Style) -> Font {
-    pdf_font(&style.font)
-}
-
 fn pdf_font(f: &gridcraft_model::Font) -> Font {
     Font::styled(Font::family_for(&f.name), f.bold, f.italic)
+}
+
+/// A cell font as the PDF sets it: the installed face, embedded (bold or italic imitated where the
+/// family lacks them), or the standard font standing in for it.
+#[derive(Clone)]
+enum CellFont {
+    Std(Font),
+    Face(std::sync::Arc<gridcraft_pdf::EmbeddedFont>, gridcraft_pdf::Synthetic, Font),
+}
+
+impl CellFont {
+    fn of(f: &gridcraft_model::Font) -> CellFont {
+        match crate::fontfiles::face(&f.name, f.bold, f.italic) {
+            Some((face, synthetic)) => CellFont::Face(face, synthetic, pdf_font(f)),
+            None => CellFont::Std(pdf_font(f)),
+        }
+    }
+    /// The embedded face, when it has every character of `text` (else the standard font with its
+    /// fallback for other scripts sets it).
+    fn face_for(&self, text: &str) -> Option<(&std::sync::Arc<gridcraft_pdf::EmbeddedFont>, gridcraft_pdf::Synthetic)> {
+        match self {
+            CellFont::Face(face, synthetic, _) if face.covers(text) => Some((face, *synthetic)),
+            _ => None,
+        }
+    }
+    fn std(&self) -> Font {
+        match self {
+            CellFont::Std(f) | CellFont::Face(_, _, f) => *f,
+        }
+    }
+    fn width(&self, size: f32, text: &str) -> f32 {
+        match self.face_for(text) {
+            Some((face, _)) => face.text_width(size, text),
+            None => gridcraft_pdf::text_width(self.std(), size, text),
+        }
+    }
+    fn draw(&self, pg: &mut Page, x: f32, y: f32, size: f32, color: Rgb, text: &str) {
+        match self.face_for(text) {
+            Some((face, synthetic)) => pg.text_embedded(x, y, size, face, synthetic, color, text),
+            None => pg.text(x, y, size, self.std(), color, text),
+        }
+    }
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
@@ -1211,10 +1254,10 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
 fn draw_runs(pg: &mut Page, wb: &Workbook, runs: &[(String, gridcraft_model::Font)], at: (f32, f32), scale: f32, color: Rgb) {
     let (mut x, y) = at;
     for (piece, f) in runs.iter().filter(|(piece, _)| !piece.is_empty()) {
-        let (font, size) = (pdf_font(f), f.size.clamp(1.0, 409.0) * scale);
+        let (font, size) = (CellFont::of(f), f.size.clamp(1.0, 409.0) * scale);
         let col = if f.color == Color::Auto { color } else { rgb_of(f.color, wb).unwrap_or(color) };
-        let w = gridcraft_pdf::text_width(font, size, piece);
-        pg.text(x, y, size, font, col, piece);
+        let w = font.width(size, piece);
+        font.draw(pg, x, y, size, col, piece);
         let line = (size * 0.06).max(0.2);
         if f.underline != Underline::None {
             pg.stroke_line(x, y + size * 0.12, x + w, y + size * 0.12, line, col);
@@ -1256,7 +1299,7 @@ fn draw_text(
     }
     let st = &l.style;
     let mut size = st.font.size.clamp(1.0, 409.0) * b.scale;
-    let font = font_for(st);
+    let font = CellFont::of(&st.font);
     let pad = PAD_PX * b.k;
     let indent = st.align.indent as f32 * 9.0 * b.k;
     let avail = (w - 2.0 * pad - indent).max(0.0);
@@ -1273,7 +1316,7 @@ fn draw_text(
     } else if code == "General"
         && let Value::Number(n) = v
     {
-        let digit = gridcraft_pdf::text_width(font, size, "0").max(0.1);
+        let digit = font.width(size, "0").max(0.1);
         let max_chars = (avail / digit).floor().max(1.0) as usize;
         gridcraft_numfmt::format_general_fit(n, max_chars.min(11)).map(|t| wb.locale.general(t)).unwrap_or_else(|| "#".repeat(max_chars.min(255)))
     } else {
@@ -1297,11 +1340,11 @@ fn draw_text(
             })
             .filter(|runs| runs.iter().map(|(s, _)| s.as_str()).collect::<String>() == text);
     let run_width = |runs: &[(String, gridcraft_model::Font)]| -> f32 {
-        runs.iter().map(|(s, f)| gridcraft_pdf::text_width(pdf_font(f), f.size.clamp(1.0, 409.0) * b.scale, s)).sum()
+        runs.iter().map(|(s, f)| CellFont::of(f).width(f.size.clamp(1.0, 409.0) * b.scale, s)).sum()
     };
     let mut tw = match &rich {
         Some(runs) => run_width(runs),
-        None => gridcraft_pdf::text_width(font, size, &text),
+        None => font.width(size, &text),
     };
     // A repeat fill (`* ` in the format, as accounting formats use) stretches the text across
     // the cell, as the grid shows it: `Hours` at the left, `20` at the right.
@@ -1310,26 +1353,26 @@ fn draw_text(
     // position it refers to; `value_text_as` put one fill character there already.
     let from_format = !sh.show_formulas && !(code == "General" && is_num);
     if let Some((ch, at)) = formatted.fill.filter(|_| !wrap && from_format) {
-        let cw = gridcraft_pdf::text_width(font, size, &ch.to_string());
-        let base = gridcraft_pdf::text_width(font, size, &formatted.text);
+        let cw = font.width(size, &ch.to_string());
+        let base = font.width(size, &formatted.text);
         if cw > 0.0
             && base < avail
             && let (Some(head), Some(tail)) = (formatted.text.get(..at), formatted.text.get(at..))
         {
             let n = (((avail - base) / cw).floor() as usize).min(2000);
             text = format!("{head}{}{tail}", ch.to_string().repeat(n));
-            tw = gridcraft_pdf::text_width(font, size, &text);
+            tw = font.width(size, &text);
             filled = true;
         }
     }
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = font.width(size, &text);
     }
     if is_num && !wrap && tw > avail + 0.01 && !sh.show_formulas {
-        let hash = gridcraft_pdf::text_width(font, size, "#").max(0.1);
+        let hash = font.width(size, "#").max(0.1);
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = font.width(size, &text);
     }
     let h_align = match st.align.h {
         // Filled text is as wide as the cell: it starts at the left padding.
@@ -1351,8 +1394,8 @@ fn draw_text(
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
     let lines: Vec<String> = match (wrap, rotated) {
-        (true, false) => wrap_lines(&text, font, size, avail.max(size)),
-        (true, true) if rot.abs() == 90 => wrap_lines(&text, font, size, (h - 2.0 * pad).max(size)),
+        (true, false) => wrap_lines_by(&text, &|s| font.width(size, s), avail.max(size)),
+        (true, true) if rot.abs() == 90 => wrap_lines(&text, font.std(), size, (h - 2.0 * pad).max(size)),
         (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
         (false, _) => vec![text],
     };
@@ -1418,7 +1461,8 @@ fn draw_text(
             } else {
                 (x + pad + (last - i) * line_h, y + pad + size * 0.8)
             };
-            pg.text_rotated(ox, oy, size, font, color, t, angle);
+            // ponytail: rotated text is set in the standard font; embed it too if it shows.
+            pg.text_rotated(ox, oy, size, font.std(), color, t, angle);
         }
         pg.restore();
         return None;
@@ -1429,8 +1473,8 @@ fn draw_text(
         let mut yy = y + pad + size * 0.8;
         for ch in chars {
             let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
-            pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
+            let cw = font.width(size, &s);
+            font.draw(pg, x + (w - cw) / 2.0, yy, size, color, &s);
             yy += line_h;
             if yy > y + h + line_h {
                 break;
@@ -1440,7 +1484,7 @@ fn draw_text(
         return None;
     }
     for (i, line) in lines.iter().enumerate() {
-        let lw = if rich.is_some() { tw } else { gridcraft_pdf::text_width(font, size, line) };
+        let lw = if rich.is_some() { tw } else { font.width(size, line) };
         let lx = match h_align {
             HAlign::Right => x + w - pad - lw - indent,
             HAlign::Center => x + (w + across - lw) / 2.0,
@@ -1454,7 +1498,7 @@ fn draw_text(
             draw_runs(pg, wb, runs, (lx, ly), b.scale, color);
             continue;
         }
-        pg.text(lx, ly, size, font, color, line);
+        font.draw(pg, lx, ly, size, color, line);
         if st.font.underline != Underline::None {
             let uw = (size * 0.06).max(0.2);
             pg.stroke_line(lx, ly + size * 0.12, lx + lw, ly + size * 0.12, uw, color);
@@ -2091,6 +2135,24 @@ mod tests {
         assert_eq!(lines(&pdf), before + 1, "one underline, under the second run");
         s.execute("cell.set", json!({"cell": "A1", "input": "Firma: Beispiel"})).unwrap();
         assert!(contains(&pdf_of(&mut s, json!({})).0, "(Firma: Beispiel) Tj"));
+    }
+
+    /// With an installed face, cell text is embedded as that face's glyphs (a subset program and a
+    /// ToUnicode map in the file); bold and italic the face lacks are imitated, as Excel does.
+    #[test]
+    fn cell_text_embeds_the_installed_face() {
+        let face = gridcraft_pdf::EmbeddedFont::parse(epaint_default_fonts::HACK_REGULAR.into(), 0).unwrap();
+        crate::fontfiles::set_test_face(Some(face.clone()));
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "Rechnung"})).unwrap();
+        s.execute("home.bold", json!({"range": "A1", "on": true})).unwrap();
+        s.execute("home.italic", json!({"range": "A1", "on": true})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        crate::fontfiles::set_test_face(None);
+        assert!(contains(&pdf, "/Subtype /CIDFontType2") && contains(&pdf, "/FontFile2 ") && contains(&pdf, "/ToUnicode "));
+        assert!(!contains(&pdf, "(Rechnung) Tj"), "the text is glyphs of the embedded face");
+        assert!(contains(&pdf, &format!("<{:04X}{:04X}", face.glyph('R'), face.glyph('e'))));
+        assert!(contains(&pdf, "2 Tr") && contains(&pdf, "1 0 0.333 1 "), "bold and italic imitated");
     }
 
     /// A repeat fill (`* `) stretches the text across the cell, as on screen.

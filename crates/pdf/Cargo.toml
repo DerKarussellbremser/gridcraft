@@ -9,3 +9,7 @@ description = "GridCraft's tiny self-contained PDF 1.7 writer (standard 14 fonts
 workspace = true
 
 [dependencies]
+
+[dev-dependencies]
+# A real TrueType face to embed in tests (fonts are never committed here).
+epaint_default_fonts = { workspace = true }

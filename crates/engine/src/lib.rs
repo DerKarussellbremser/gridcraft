@@ -13,6 +13,7 @@ mod clip_html;
 pub mod cmd;
 pub mod display;
 pub mod fill;
+pub(crate) mod fontfiles;
 pub mod import_text;
 pub mod io;
 pub mod links;

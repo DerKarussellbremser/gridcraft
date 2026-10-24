@@ -8,14 +8,31 @@
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
+//! - TrueType fonts from the system, embedded as the subset of glyphs a document uses
+//!   ([`EmbeddedFont`], [`Page::text_embedded`]), with bold and italic imitated where a face lacks
+//!   them.
+//!
 //! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
 //! needs no dependencies.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 mod metrics;
+mod truetype;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::sync::Arc;
+
+pub use truetype::{EmbeddedFont, FaceInfo, face_count, faces};
+
+/// How text in a face that lacks the asked-for style imitates it, as Excel does: slanted by 1/3,
+/// and outlined about 1/36 of its size thick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Synthetic {
+    pub bold: bool,
+    pub italic: bool,
+}
 
 /// RGB colour, 0–255 per channel.
 pub type Rgb = [u8; 3];
@@ -320,6 +337,8 @@ pub struct Page {
     height: f32,
     content: String,
     fonts: [bool; FONT_SLOTS],
+    /// Embedded faces used on the page, each with its glyphs and the character each stands for.
+    embedded: Vec<(Arc<EmbeddedFont>, BTreeMap<u16, char>)>,
     images: Vec<ImageData>,
     links: Vec<LinkAnnotation>,
     depth: u32,
@@ -575,6 +594,37 @@ impl Page {
         self.op(&s);
     }
 
+    /// Text in an embedded TrueType face, its baseline starting at `(x, y)`. Characters the face
+    /// has no glyph for show its missing-glyph box; `synthetic` slants or thickens the text.
+    pub fn text_embedded(&mut self, x: f32, y: f32, size: f32, font: &Arc<EmbeddedFont>, synthetic: Synthetic, color: Rgb, text: &str) {
+        if text.is_empty() || !extent(size) || !finite(&[x, y]) || self.full() {
+            return;
+        }
+        let at = match self.embedded.iter().position(|(f, _)| f.id == font.id) {
+            Some(i) => i,
+            None => {
+                self.embedded.push((font.clone(), BTreeMap::new()));
+                self.embedded.len() - 1
+            }
+        };
+        let mut hex = String::with_capacity(text.len() * 4);
+        if let Some((_, used)) = self.embedded.get_mut(at) {
+            for c in text.chars() {
+                let g = font.glyph(c);
+                used.entry(g).or_insert(c);
+                let _ = write!(hex, "{g:04X}");
+            }
+        }
+        let size = size.min(10_000.0);
+        let mut s = format!("q\nBT\n{}\n", rgb_op(color, false));
+        if synthetic.bold {
+            let _ = writeln!(s, "{}\n{} w\n2 Tr", rgb_op(color, true), n(size / 36.0));
+        }
+        let skew = if synthetic.italic { 0.333 } else { 0.0 };
+        let _ = write!(s, "1 0 {} 1 {} {} Tm\n/G{} {} Tf\n<{hex}> Tj\nET\nQ", n(skew), n(x), n(self.y(y)), font.id, n(size));
+        self.op(&s);
+    }
+
     /// Draws an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) into the box
     /// `(x, y, w, h)`. Malformed or oversized buffers are ignored.
     pub fn image_rgba(&mut self, x: f32, y: f32, w: f32, h: f32, rgba: &[u8], pw: u32, ph: u32) {
@@ -649,6 +699,16 @@ fn run_length(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The six capital letters that mark a subset font's name (ISO 32000-1 9.6.4), from its glyphs.
+fn subset_tag(id: u32, gids: &BTreeSet<u16>) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ u64::from(id);
+    for g in gids {
+        h ^= u64::from(*g);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    (0..6).map(|i| (b'A' + ((h >> (i * 7)) % 26) as u8) as char).collect()
+}
+
 /// Longest Info string written, in characters; longer values are cut on a character boundary.
 const MAX_INFO_CHARS: usize = 1024;
 
@@ -677,7 +737,16 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; FONT_SLOTS], images: Vec::new(), links: Vec::new(), depth: 0 });
+        self.pages.push(Page {
+            width,
+            height,
+            content: String::new(),
+            fonts: [false; FONT_SLOTS],
+            embedded: Vec::new(),
+            images: Vec::new(),
+            links: Vec::new(),
+            depth: 0,
+        });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
     }
@@ -749,6 +818,54 @@ impl PdfDoc {
                 let enc = if name.starts_with("Symbol") { "" } else { " /Encoding /WinAnsiEncoding" };
                 objects.push((*id, format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>").into_bytes()));
             }
+        }
+        // Embedded faces: a Type0 font over a CIDFontType2 with glyph ids as character codes, its
+        // descriptor, the subset font program and a ToUnicode map, holding what every page used.
+        let mut faces: Vec<(Arc<EmbeddedFont>, BTreeMap<u16, char>)> = Vec::new();
+        for p in &self.pages {
+            for (font, used) in &p.embedded {
+                match faces.iter_mut().find(|(f, _)| f.id == font.id) {
+                    Some((_, all)) => {
+                        for (g, c) in used {
+                            all.entry(*g).or_insert(*c);
+                        }
+                    }
+                    None => faces.push((font.clone(), used.clone())),
+                }
+            }
+        }
+        for (font, used) in &faces {
+            let gids: BTreeSet<u16> = used.keys().copied().collect();
+            let (type0, cid, desc, file, tu) = (next, next + 1, next + 2, next + 3, next + 4);
+            next += 5;
+            let base = format!("{}+{}", subset_tag(font.id, &gids), font.ps_name);
+            let widths: String = gids.iter().map(|g| format!("{g} [{}] ", font.per_mille(font.advance(*g) as f32))).collect();
+            let _ = write!(font_dict, "/G{} {type0} 0 R ", font.id);
+            objects.push((
+                type0,
+                format!("<< /Type /Font /Subtype /Type0 /BaseFont /{base} /Encoding /Identity-H /DescendantFonts [{cid} 0 R] /ToUnicode {tu} 0 R >>")
+                    .into_bytes(),
+            ));
+            objects.push((
+                cid,
+                format!(
+                    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{base} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {desc} 0 R /W [{widths}] /CIDToGIDMap /Identity >>"
+                )
+                .into_bytes(),
+            ));
+            // A program that can't be cut (a damaged face) leaves the font for the viewer to substitute.
+            let program = font.subset(&gids).unwrap_or_default();
+            let file_ref = if program.is_empty() { String::new() } else { format!(" /FontFile2 {file} 0 R") };
+            objects.push((desc, format!("<< {}{file_ref} >>", font.descriptor(&base)).into_bytes()));
+            let mut o = format!("<< /Length {} /Length1 {} >>\nstream\n", program.len(), program.len()).into_bytes();
+            o.extend_from_slice(&program);
+            o.extend_from_slice(b"\nendstream");
+            objects.push((file, o));
+            let cmap = truetype::to_unicode(used);
+            let mut o = format!("<< /Length {} >>\nstream\n", cmap.len()).into_bytes();
+            o.extend_from_slice(cmap.as_bytes());
+            o.extend_from_slice(b"\nendstream");
+            objects.push((tu, o));
         }
         for page in &mut self.pages {
             while page.depth > 0 {
