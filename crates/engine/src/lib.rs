@@ -44,9 +44,17 @@ pub use selection::Selection;
 /// Letter in the US…), as Excel takes the printer's default. Called once at start-up by the apps;
 /// without it (tests, embedders) that paper is Letter.
 pub fn use_system_paper() {
-    if let Some(paper) = sys_locale::get_locale().as_deref().and_then(gridcraft_model::paper_for_locale) {
+    let env = |name: &str| std::env::var(name).ok();
+    if let Some(paper) = system_paper(env, sys_locale::get_locale()) {
         gridcraft_model::set_default_paper(paper);
     }
+}
+
+/// The paper of the first locale that names a region: POSIX's for paper (`LC_ALL`, then
+/// `LC_PAPER`), then the system's (`sys_locale`, which reads the message locale on Unix and the
+/// regional format on Windows and macOS).
+fn system_paper(env: impl Fn(&str) -> Option<String>, system: Option<String>) -> Option<&'static str> {
+    ["LC_ALL", "LC_PAPER"].into_iter().filter_map(env).chain(system).find_map(|tag| gridcraft_model::paper_for_locale(&tag))
 }
 
 #[derive(Debug, thiserror::Error)]
