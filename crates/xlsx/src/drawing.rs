@@ -265,11 +265,12 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
 
 /// The pictures a sheet's embedded objects show (`<oleObject progId="Word.Picture.8">` with its
 /// `<objectPr r:id>` preview and `<anchor>`), as display-only images. The objects themselves are
-/// kept by the pass-through, so these are never written back as pictures.
-pub(crate) fn ole_previews(cx: &mut Ctx<'_>, sheet_part: &str, sheet: &mut Sheet) {
-    let Some(kept) = sheet.preserved.clone() else { return };
-    let Some(el) = kept.elements.iter().find(|e| e.slot == "oleObjects") else { return };
-    let Ok(x) = crate::xml::parse(el.xml.as_bytes()) else { return };
+/// kept by the pass-through, so these are never written back as pictures. Returns how many
+/// objects have no preview to show.
+pub(crate) fn ole_previews(cx: &mut Ctx<'_>, sheet_part: &str, sheet: &mut Sheet) -> usize {
+    let Some(kept) = sheet.preserved.clone() else { return 0 };
+    let Some(el) = kept.elements.iter().find(|e| e.slot == "oleObjects") else { return 0 };
+    let Ok(x) = crate::xml::parse(el.xml.as_bytes()) else { return 1 };
     let rels = cx.pkg.rels(sheet_part).unwrap_or_default();
     // Excel 2010+ puts the anchored form in `mc:Choice` (sometimes around `<oleObjects>` too);
     // the `mc:Fallback` copy has no preview and would only repeat the object.
@@ -283,6 +284,7 @@ pub(crate) fn ole_previews(cx: &mut Ctx<'_>, sheet_part: &str, sheet: &mut Sheet
     }
     let mut objects = Vec::new();
     collect(&x, &mut objects, 0);
+    let mut unshown = objects.len();
     for o in objects {
         let Some(pr) = o.child("objectPr") else { continue };
         let (Some(a), Some(rid)) = (pr.child("anchor"), pr.attr("id")) else { continue };
@@ -307,7 +309,9 @@ pub(crate) fn ole_previews(cx: &mut Ctx<'_>, sheet_part: &str, sheet: &mut Sheet
             alt,
             preview: true,
         });
+        unshown -= 1;
     }
+    unshown
 }
 
 // ---------------------------------------------------------------- writing

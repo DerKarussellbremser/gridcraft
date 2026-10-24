@@ -294,8 +294,13 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name);
-        // What its embedded objects show, drawn like pictures.
-        crate::drawing::ole_previews(&mut cx, &rel.target, &mut sheet);
+        // What its embedded objects show, drawn like pictures. Only what shows nothing (a form
+        // control, an object without a preview) is worth a note.
+        let unshown = crate::drawing::ole_previews(&mut cx, &rel.target, &mut sheet);
+        let controls = sheet.preserved.as_ref().is_some_and(|k| k.elements.iter().any(|e| e.slot == "controls"));
+        if unshown > 0 || controls {
+            cx.warn(format!("sheet \"{name}\": embedded objects and form controls are not shown; they are kept for saving"));
+        }
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
             Some("veryHidden") => Visibility::VeryHidden,

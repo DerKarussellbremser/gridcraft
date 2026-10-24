@@ -227,6 +227,24 @@ fn embedded_objects_show_their_preview_and_save_once() {
     assert!(back.sheets.iter().all(|s| s.images.iter().all(|i| i.preview)), "no picture was added");
 }
 
+/// The open note about objects that aren't shown comes for what really isn't: the sheet's check box
+/// (a form control), not an embedded object whose preview shows.
+#[test]
+fn only_what_shows_nothing_is_noted() {
+    let note = |w: &[String]| w.iter().any(|w| w.contains("\"Data\": embedded objects and form controls are not shown"));
+    let (_, rep) = read_xlsx(&rich_package()).unwrap();
+    assert!(note(&rep.warnings), "the check box: {:?}", rep.warnings);
+    let mut u = Unpacked::new(&rich_package());
+    let sheet = String::from_utf8(u.parts["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    let (head, tail) = sheet.split_once("<controls>").unwrap();
+    let without = format!("{head}{}", tail.split_once("</controls>").unwrap().1);
+    u.parts.insert("xl/worksheets/sheet1.xml".into(), without.into_bytes());
+    let parts: Vec<(&str, &[u8])> = u.parts.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (wb, rep) = read_xlsx(&super::make_zip(&parts)).unwrap();
+    assert!(wb.sheet(0).unwrap().images.iter().any(|i| i.preview), "the object shows its preview");
+    assert!(!note(&rep.warnings), "{:?}", rep.warnings);
+}
+
 /// Updated link values and a changed source are saved, so the next open (here or in Excel)
 /// sees them; the rest of the link part stays as it was.
 #[test]
