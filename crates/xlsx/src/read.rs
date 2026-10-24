@@ -15,6 +15,8 @@ pub struct Ctx<'a> {
     pub pkg: Package<'a>,
     pub report: ReadReport,
     pub sst: Vec<Arc<str>>,
+    /// Formatted runs of the shared strings, by index (`None` for plain ones).
+    pub sst_rich: Vec<Option<Arc<gridcraft_model::RichText>>>,
     /// Phonetic (furigana) data of the shared strings, one entry per base text.
     pub phonetics: Vec<PhoneticString>,
     /// Cell format index → model style.
@@ -102,6 +104,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         pkg,
         report: ReadReport::default(),
         sst: vec![],
+        sst_rich: vec![],
         phonetics: vec![],
         xf_map: vec![],
         dxfs: vec![],
@@ -181,10 +184,13 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         match cx.pkg.read(&r.target)? {
             Some(b) => {
                 let mut sst = Vec::new();
+                let mut sst_rich = Vec::new();
                 let mut phonetics = Vec::new();
                 let mut dropped = 0usize;
+                let palette = cx.palette.clone();
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
                     let text = xml::rich_text(&si);
+                    sst_rich.push(crate::rich::read(&si, &palette).filter(|r| *r.text == *text).map(Arc::new));
                     let raw = si.kids("rPh").count();
                     let (runs, props) = xml::phonetic_data(&si, &text);
                     dropped += raw.saturating_sub(runs.len());
@@ -201,6 +207,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                     cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
                 }
                 cx.sst = sst;
+                cx.sst_rich = sst_rich;
                 cx.keep_phonetics(phonetics);
             }
             None => cx.warn(format!("missing part {}", r.target)),

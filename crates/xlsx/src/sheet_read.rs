@@ -452,10 +452,15 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
     let style = cx.style(c.attr_u32("s"));
     let v = c.child("v").map(|v| v.text.as_str());
+    // Formatted runs of the cell's string (rich text), kept beside the cell.
+    let mut rich = None;
     let value = match c.attr("t").unwrap_or("n") {
         "s" => match v.and_then(|v| v.trim().parse::<usize>().ok()) {
             Some(i) => match cx.sst.get(i) {
-                Some(s) => Value::Text(s.clone()),
+                Some(s) => {
+                    rich = cx.sst_rich.get(i).cloned().flatten();
+                    Value::Text(s.clone())
+                }
                 None => {
                     cx.warn("some cells refer to missing shared strings");
                     Value::Empty
@@ -464,9 +469,14 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             None => Value::Empty,
         },
         "str" => v.map(|v| Value::text(xml::decode_xstring(v))).unwrap_or(Value::Empty),
-        "inlineStr" => {
-            c.child("is").map(|is| Value::text(xml::rich_text(is))).or_else(|| v.map(|v| Value::text(xml::decode_xstring(v)))).unwrap_or(Value::Empty)
-        }
+        "inlineStr" => match c.child("is") {
+            Some(is) => {
+                let text = xml::rich_text(is);
+                rich = crate::rich::read(is, &cx.palette).filter(|r| *r.text == *text).map(Arc::new);
+                Value::text(text)
+            }
+            None => v.map(|v| Value::text(xml::decode_xstring(v))).unwrap_or(Value::Empty),
+        },
         "b" => v.map(|v| Value::Bool(matches!(v.trim(), "1" | "true" | "TRUE"))).unwrap_or(Value::Empty),
         "e" => v.map(|v| Value::Error(CellError::parse(v.trim()).unwrap_or(CellError::Value))).unwrap_or(Value::Empty),
         "d" => match v.and_then(|v| parse_iso_datetime(v.trim(), cx.date_system)) {
@@ -512,6 +522,10 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
+    // A formula's result is set in the cell's font.
+    if let Some(rich) = rich.filter(|_| formula.is_none()) {
+        sheet.rich.insert(pos, rich);
+    }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 

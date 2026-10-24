@@ -57,8 +57,8 @@ fn bool_prop(e: &El, name: &str) -> bool {
     e.child(name).is_some_and(|c| c.flag("val", true))
 }
 
-const DEFAULT_FONT_FAMILY: u8 = 2;
-const MAX_FONT_FAMILY: u8 = 14;
+pub(crate) const DEFAULT_FONT_FAMILY: u8 = 2;
+pub(crate) const MAX_FONT_FAMILY: u8 = 14;
 
 pub fn read_font(e: &El, palette: &[u32]) -> Font {
     let mut f = Font::default();

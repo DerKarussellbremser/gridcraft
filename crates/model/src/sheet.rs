@@ -90,6 +90,9 @@ pub struct Sheet {
     pub comments: BTreeMap<CellRef, Comment>,
     #[serde(with = "crate::cellmap")]
     pub hyperlinks: BTreeMap<CellRef, Hyperlink>,
+    /// Formatted runs of text cells (rich text), valid only while the cell holds their text.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::cellmap")]
+    pub rich: BTreeMap<CellRef, Arc<crate::rich::RichText>>,
     pub charts: Vec<Chart>,
     pub images: Vec<Image>,
     pub shapes: Vec<Shape>,
@@ -160,6 +163,7 @@ impl Sheet {
             autofilter: None,
             comments: BTreeMap::new(),
             hyperlinks: BTreeMap::new(),
+            rich: BTreeMap::new(),
             charts: vec![],
             images: vec![],
             shapes: vec![],
@@ -196,6 +200,15 @@ impl Sheet {
         match self.cells.get(c) {
             Some(cell) if !cell.value.is_empty() || cell.formula.is_some() => Some(&cell.value),
             _ => self.spill.get(&c),
+        }
+    }
+    /// The cell's text cut into its formatted runs, when it is a constant text cell whose runs
+    /// still fit it (see [`crate::rich::RichText::spans`]).
+    pub fn rich_spans(&self, c: CellRef) -> Option<Vec<(&str, Option<&crate::style::Font>)>> {
+        let rich = self.rich.get(&c)?;
+        match self.cells.get(c) {
+            Some(Cell { value: Value::Text(t), formula: None, .. }) => rich.spans(t),
+            _ => None,
         }
     }
     /// Last row (inclusive) of the maximal contiguous run of non-empty values in `col`, starting

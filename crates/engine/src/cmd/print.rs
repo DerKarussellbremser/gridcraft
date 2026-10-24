@@ -952,7 +952,11 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, x0: f32, y0: f32, x
 }
 
 fn font_for(style: &Style) -> Font {
-    Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
+    pdf_font(&style.font)
+}
+
+fn pdf_font(f: &gridcraft_model::Font) -> Font {
+    Font::styled(Font::family_for(&f.name), f.bold, f.italic)
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
@@ -1202,6 +1206,29 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
+/// Draws rich text runs one after another from the baseline point `at`, each in its own font,
+/// size, colour (`color` for the automatic one), underline and strikeout.
+fn draw_runs(pg: &mut Page, wb: &Workbook, runs: &[(String, gridcraft_model::Font)], at: (f32, f32), scale: f32, color: Rgb) {
+    let (mut x, y) = at;
+    for (piece, f) in runs.iter().filter(|(piece, _)| !piece.is_empty()) {
+        let (font, size) = (pdf_font(f), f.size.clamp(1.0, 409.0) * scale);
+        let col = if f.color == Color::Auto { color } else { rgb_of(f.color, wb).unwrap_or(color) };
+        let w = gridcraft_pdf::text_width(font, size, piece);
+        pg.text(x, y, size, font, col, piece);
+        let line = (size * 0.06).max(0.2);
+        if f.underline != Underline::None {
+            pg.stroke_line(x, y + size * 0.12, x + w, y + size * 0.12, line, col);
+            if matches!(f.underline, Underline::Double | Underline::DoubleAccounting) {
+                pg.stroke_line(x, y + size * 0.24, x + w, y + size * 0.24, line, col);
+            }
+        }
+        if f.strike {
+            pg.stroke_line(x, y - size * 0.3, x + w, y - size * 0.3, line, col);
+        }
+        x += w;
+    }
+}
+
 /// Draws a cell's text. With `dry`, draws nothing and returns the left and right edges the text
 /// spans (wider than the cell when it overflows into empty neighbours), so borders under
 /// overflowing text can be left out, as Excel does.
@@ -1259,7 +1286,23 @@ fn draw_text(
     if text.is_empty() {
         return None;
     }
-    let mut tw = gridcraft_pdf::text_width(font, size, &text);
+    // Rich text: the runs of a one-line text cell that shows its own text, each in its own font.
+    // ponytail: wrapped, rotated and shrunk rich text prints in the cell's font.
+    let rich: Option<Vec<(String, gridcraft_model::Font)>> =
+        (!wrap && st.align.rotation == 0 && !st.align.shrink && formatted.fill.is_none() && !sh.show_formulas)
+            .then(|| sh.rich_spans(c))
+            .flatten()
+            .map(|spans| {
+                spans.into_iter().map(|(s, f)| (s.replace(['\n', '\r'], " "), f.cloned().unwrap_or_else(|| st.font.clone()))).collect::<Vec<_>>()
+            })
+            .filter(|runs| runs.iter().map(|(s, _)| s.as_str()).collect::<String>() == text);
+    let run_width = |runs: &[(String, gridcraft_model::Font)]| -> f32 {
+        runs.iter().map(|(s, f)| gridcraft_pdf::text_width(pdf_font(f), f.size.clamp(1.0, 409.0) * b.scale, s)).sum()
+    };
+    let mut tw = match &rich {
+        Some(runs) => run_width(runs),
+        None => gridcraft_pdf::text_width(font, size, &text),
+    };
     // A repeat fill (`* ` in the format, as accounting formats use) stretches the text across
     // the cell, as the grid shows it: `Hours` at the left, `20` at the right.
     let mut filled = false;
@@ -1397,7 +1440,7 @@ fn draw_text(
         return None;
     }
     for (i, line) in lines.iter().enumerate() {
-        let lw = gridcraft_pdf::text_width(font, size, line);
+        let lw = if rich.is_some() { tw } else { gridcraft_pdf::text_width(font, size, line) };
         let lx = match h_align {
             HAlign::Right => x + w - pad - lw - indent,
             HAlign::Center => x + (w + across - lw) / 2.0,
@@ -1405,6 +1448,10 @@ fn draw_text(
         };
         let ly = first_baseline + i as f32 * line_h;
         if ly - size > y + h || ly < y - line_h {
+            continue;
+        }
+        if let Some(runs) = &rich {
+            draw_runs(pg, wb, runs, (lx, ly), b.scale, color);
             continue;
         }
         pg.text(lx, ly, size, font, color, line);
@@ -2021,6 +2068,29 @@ mod tests {
         let short = lines("short");
         assert!(short >= 1, "the border is drawn");
         assert_eq!(lines("A long text that runs on over several cells and further still"), short - 1);
+    }
+
+    /// A rich text cell prints run by run, the underlined run with a line under it alone; once the
+    /// cell holds other text its runs are stale and it prints in one piece.
+    #[test]
+    fn rich_text_prints_each_run_in_its_own_font() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "Firma: Muster"})).unwrap();
+        let lines = |pdf: &[u8]| pdf.windows(4).filter(|w| *w == b" l S").count();
+        let before = lines(&pdf_of(&mut s, json!({})).0);
+        let d = s.doc_mut().unwrap();
+        let under = gridcraft_model::Font { size: 8.0, underline: Underline::Single, ..Default::default() };
+        let runs = vec![TextRun { len: 7, font: None }, TextRun { len: 6, font: Some(under) }];
+        std::sync::Arc::make_mut(&mut d.wb)
+            .sheet_mut(0)
+            .unwrap()
+            .rich
+            .insert(CellRef::new(0, 0), std::sync::Arc::new(RichText { text: "Firma: Muster".into(), runs }));
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert!(contains(&pdf, "(Firma: ) Tj") && contains(&pdf, "(Muster) Tj"), "each run is its own text");
+        assert_eq!(lines(&pdf), before + 1, "one underline, under the second run");
+        s.execute("cell.set", json!({"cell": "A1", "input": "Firma: Beispiel"})).unwrap();
+        assert!(contains(&pdf_of(&mut s, json!({})).0, "(Firma: Beispiel) Tj"));
     }
 
     /// A repeat fill (`* `) stretches the text across the cell, as on screen.

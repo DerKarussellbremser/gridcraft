@@ -26,6 +26,7 @@ mod package;
 mod passthrough;
 mod pivot;
 mod read;
+mod rich;
 mod richdata;
 mod sheet_read;
 mod sheet_write;

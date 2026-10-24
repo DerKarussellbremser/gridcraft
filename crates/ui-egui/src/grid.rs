@@ -1274,10 +1274,21 @@ pub(crate) fn paint_quadrant(
         let indent = st.align.indent as f32 * 9.0 * z;
         let pad = 2.5 * z;
         let rotated = st.align.rotation != 0 && st.align.rotation != 255;
+        // Rich text: each run in its own font, while the cell shows its own text (no number format
+        // changed it) and is neither rotated, shrunk nor filled.
+        let rich = if rotated || st.align.shrink || fill_char.is_some() {
+            None
+        } else {
+            sh.rich_spans(c).filter(|spans| spans.iter().map(|(s, _)| *s).collect::<String>() == text)
+        };
+        let bold_dx = if rich.is_some() { 0.0 } else { bold_dx };
         // Rotated text wraps along its own direction (below), not across the column width.
         if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
-            let mut job = cell_job(text.clone(), font.clone(), color, wrap_w, slant);
+            let mut job = match &rich {
+                Some(spans) => rich_job(spans, &st.font, z, color, wb, wrap_w, false),
+                None => cell_job(text.clone(), font.clone(), color, wrap_w, slant),
+            };
             job.halign = match halign {
                 HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
                 HAlign::Right => egui::Align::RIGHT,
@@ -1304,7 +1315,10 @@ pub(crate) fn paint_quadrant(
             .flatten();
         let shrunk = small.is_some();
         let font = small.unwrap_or(font);
-        let mut galley = p.layout_job(cell_job(first_line.clone(), font.clone(), color, f32::INFINITY, slant));
+        let mut galley = match &rich {
+            Some(spans) => p.layout_job(rich_job(spans, &st.font, z, color, wb, f32::INFINITY, true)),
+            None => p.layout_job(cell_job(first_line.clone(), font.clone(), color, f32::INFINITY, slant)),
+        };
         let mut w = galley.size().x;
         // Numbers and dates never overflow: they show #### when too narrow.
         let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;
@@ -1405,7 +1419,9 @@ pub(crate) fn paint_quadrant(
             paint_cell_galley(&cp, pos2(x, y), galley.clone(), color, bold_dx);
         }
         let baseline = y + gh * 0.82;
-        match st.font.underline {
+        // Rich text carries its own underline and strikeout per run.
+        let (underline, strike) = if rich.is_some() { (Underline::None, false) } else { (st.font.underline, st.font.strike) };
+        match underline {
             Underline::None => {}
             Underline::Double | Underline::DoubleAccounting => {
                 cp.line_segment([pos2(x, baseline + 1.0), pos2(x + w, baseline + 1.0)], Stroke::new(1.0, color));
@@ -1415,7 +1431,7 @@ pub(crate) fn paint_quadrant(
                 cp.line_segment([pos2(x, baseline + 1.0), pos2(x + w, baseline + 1.0)], Stroke::new(1.0, color));
             }
         }
-        if st.font.strike {
+        if strike {
             cp.line_segment([pos2(x, y + gh * 0.55), pos2(x + w, y + gh * 0.55)], Stroke::new(1.0, color));
         }
     }
@@ -1626,6 +1642,42 @@ fn cell_job(text: String, font: FontId, color: Color32, wrap: f32, slant: bool) 
     let mut job = egui::text::LayoutJob::simple(text, font, color, wrap);
     for section in &mut job.sections {
         section.format.italics = slant;
+    }
+    job
+}
+
+/// A rich text cell's runs as one layout job, each in its own font (`None`: the cell's `cell`
+/// font); a run in the automatic colour takes the cell's text `color`. `one_line` drops line
+/// breaks, as a cell without Wrap Text shows them.
+fn rich_job(
+    spans: &[(&str, Option<&gridcraft_engine::model::Font>)],
+    cell: &gridcraft_engine::model::Font,
+    z: f32,
+    color: Color32,
+    wb: &Workbook,
+    wrap: f32,
+    one_line: bool,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap;
+    for (piece, font) in spans {
+        let f = font.unwrap_or(cell);
+        let text: String = if one_line { piece.chars().filter(|&ch| ch != '\n' && ch != '\r').collect() } else { (*piece).to_string() };
+        if text.is_empty() {
+            continue;
+        }
+        let size = f.size.clamp(1.0, 409.0) * 96.0 / 72.0 * z;
+        let col = if f.color == Color::Auto { color } else { col32(f.color, wb, color) };
+        let line = |on: bool| if on { Stroke::new(1.0, col) } else { Stroke::NONE };
+        let format = egui::TextFormat {
+            font_id: FontId::new(size, theme::cell_family(&f.name, f.bold, f.italic)),
+            color: col,
+            italics: f.italic && crate::fonts::is_slanted(&f.name, f.bold),
+            underline: line(f.underline != Underline::None),
+            strikethrough: line(f.strike),
+            ..Default::default()
+        };
+        job.append(&text, 0.0, format);
     }
     job
 }
@@ -4086,6 +4138,26 @@ pub(crate) fn heading_font_size(zoom: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    /// Each run is a section in its own size, colour and lines; the cell's font fills in for a run
+    /// without one, and one-line cells drop the breaks.
+    #[test]
+    fn rich_runs_lay_out_as_sections_in_their_own_fonts() {
+        use super::{Color32, Workbook, rich_job};
+        use gridcraft_engine::model::{Color, Font, Underline};
+        let cell = Font { size: 10.0, ..Default::default() };
+        let run = Font { size: 8.0, underline: Underline::Single, color: Color::Rgb(0xFF0000), ..Default::default() };
+        let spans = [("Firma:\n", None), ("Muster", Some(&run))];
+        let job = rich_job(&spans, &cell, 2.0, Color32::BLACK, &Workbook::new(), f32::INFINITY, true);
+        assert_eq!(job.text, "Firma:Muster");
+        assert_eq!(job.sections.len(), 2);
+        let (plain, under) = (&job.sections[0].format, &job.sections[1].format);
+        assert_eq!((plain.font_id.size, plain.color, plain.underline.width), (10.0 * 96.0 / 72.0 * 2.0, Color32::BLACK, 0.0));
+        assert_eq!(under.font_id.size, 8.0 * 96.0 / 72.0 * 2.0);
+        assert!(under.underline.width > 0.0 && under.color == Color32::from_rgb(0xFF, 0, 0));
+        // Wrapped cells keep the break.
+        assert_eq!(rich_job(&spans, &cell, 1.0, Color32::BLACK, &Workbook::new(), 100.0, false).text, "Firma:\nMuster");
+    }
 
     #[test]
     fn editor_matches_the_cell_while_the_text_fits() {

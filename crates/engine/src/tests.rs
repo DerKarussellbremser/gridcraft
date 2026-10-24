@@ -3690,6 +3690,26 @@ fn a_cut_moves_the_sources_notes_hyperlinks_and_merges() {
     assert!(v(&s, "A1").is_empty() && v(&s, "B1").is_empty());
 }
 
+/// Rich text runs move with their cell when rows go in above it, and survive a JSON save.
+#[test]
+fn rich_text_runs_follow_inserted_rows_and_json() {
+    use gridcraft_model::{Font, RichText, TextRun};
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "ab"})).unwrap();
+    let bold = Font { bold: true, ..Default::default() };
+    let rich = RichText { text: "ab".into(), runs: vec![TextRun { len: 1, font: None }, TextRun { len: 1, font: Some(bold) }] };
+    let d = s.doc_mut().unwrap();
+    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().rich.insert(CellRef::new(0, 0), std::sync::Arc::new(rich));
+    s.execute("home.insertRows", json!({"rows": "1:2"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let sh = wb.active().unwrap();
+    assert!(sh.rich_spans(CellRef::parse("A3").unwrap()).is_some_and(|spans| spans.len() == 2));
+    assert!(!sh.rich.contains_key(&CellRef::new(0, 0)));
+    let bytes = crate::io::save_bytes(wb, "book.json").unwrap();
+    let (back, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
+    assert_eq!(back.active().unwrap().rich, sh.rich);
+}
+
 /// Page Layout ▸ Print Titles: naming one axis must not clear the other. `print_titles` read
 /// both `rows` and `cols` into `Option`s and assigned both unconditionally, so
 /// `{"rows":"2:2"}` silently dropped the repeated columns from every printed page.

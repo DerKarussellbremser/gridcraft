@@ -376,8 +376,13 @@ impl SheetApp {
             names.extend(d.wb.styles.iter().map(|(_, s)| s.font.name.clone()));
             names.push(d.wb.theme.major_font.clone());
             names.push(d.wb.theme.minor_font.clone());
-            // Text boxes and shapes name their own typefaces.
+            // Text boxes and shapes name their own typefaces, and so do rich text runs.
             names.extend(d.wb.sheets.iter().flat_map(|sh| sh.shapes.iter().filter_map(|s| s.format.font.clone())));
+            names.extend(
+                d.wb.sheets
+                    .iter()
+                    .flat_map(|sh| sh.rich.values().flat_map(|r| r.runs.iter().filter_map(|run| run.font.as_ref().map(|f| f.name.clone())))),
+            );
         }
         names
     }
