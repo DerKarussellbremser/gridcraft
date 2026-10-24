@@ -1802,7 +1802,33 @@ fn seg_size(sh: &Sheet, lay: &SheetLayout, seg: (u32, u32), rows: bool) -> f32 {
 
 /// Renders laid-out sheets to a PDF.
 pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
-    let mut doc = PdfDoc::new();
+    let doc = render(wb, layouts, file, path, None);
+    let n = doc.page_count();
+    (doc.finish(), n)
+}
+
+/// Page `page` (1-based) of the laid-out sheets as what it draws: its size in points and the
+/// drawing operations, the very ones its PDF is written from.
+pub fn render_page_ops(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, page: usize) -> Option<(f32, f32, Vec<gridcraft_pdf::Op>)> {
+    let doc = render(wb, layouts, file, path, Some(page));
+    let pg = doc.page(0)?;
+    Some((pg.width(), pg.height(), pg.ops().to_vec()))
+}
+
+/// Page `page` (1-based, numbered as `file.printPreview` numbers them) of what printing with
+/// `params` puts on paper, for the print preview (see [`render_page_ops`]).
+pub fn preview_page(s: &Session, params: &Json, page: usize) -> Result<Option<(f32, f32, Vec<gridcraft_pdf::Op>)>> {
+    let opts = PrintOptions::from_params(params, "file.printPreview")?;
+    let d = s.doc()?;
+    let lays = layouts(&d.wb, &opts);
+    let path = d.path.clone().unwrap_or_default();
+    Ok(render_page_ops(&d.wb, &lays, &d.display_title(), &path, page))
+}
+
+/// Draws the laid-out sheets: every page, or with `only` just that one (1-based) into a recording
+/// document.
+fn render(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, only: Option<usize>) -> PdfDoc {
+    let mut doc = if only.is_some() { PdfDoc::recording() } else { PdfDoc::new() };
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
     let total: usize = layouts.iter().map(|l| l.pages.len()).sum();
@@ -1820,6 +1846,9 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         let (aw, ah) = lay.avail();
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
             page_no += 1;
+            if only.is_some_and(|o| o != page_no) {
+                continue;
+            }
             let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };
             let rsegs = segments(lay.title_rows, rband);
             let csegs = segments(lay.title_cols, cband);
@@ -1876,8 +1905,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             page.link_page(lx, ly, w, h, target_page, x, y);
         }
     }
-    let n = doc.page_count();
-    (doc.finish(), n)
+    doc
 }
 
 // ---------------------------------------------------------------- commands
@@ -2565,6 +2593,38 @@ mod tests {
             .lines()
             .any(|l| l.ends_with(" l S") && l.split(' ').nth(1).and_then(|y| y.parse::<f32>().ok()).is_some_and(|y| (y - top).abs() < 0.05));
         assert!(border, "picture top {top} has no border line at its height");
+    }
+
+    /// The print preview paints what the PDF is written from: the page's text, borders and
+    /// pictures, in its fonts.
+    #[test]
+    fn the_preview_page_draws_what_prints() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "Rechnung"})).unwrap();
+        s.execute("home.bold", json!({"range": "A1"})).unwrap();
+        s.execute("home.borders", json!({"range": "A3", "preset": "bottom"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A80", "input": "page 2"})).unwrap();
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255])))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let id = wb.next_object_id();
+        let anchor = Anchor { cell: CellRef::new(4, 1), dx: 0.0, dy: 0.0, width: 40.0, height: 20.0, mode: gridcraft_model::AnchorMode::MoveAndSize };
+        wb.sheet_mut(0).unwrap().images.push(Image { id, anchor, data: png.into(), mime: "image/png".into(), alt: String::new(), preview: false });
+        let pages = s.execute("file.printPreview", json!({})).unwrap()["pages"].as_u64().unwrap() as usize;
+        assert_eq!(pages, 2);
+        let (w, h, ops) = preview_page(&s, &json!({}), 1).unwrap().unwrap();
+        assert!(w > 500.0 && h > 700.0);
+        let texts: Vec<&gridcraft_pdf::TextOp> = ops.iter().filter_map(|o| if let gridcraft_pdf::Op::Text(t) = o { Some(t) } else { None }).collect();
+        assert!(texts.iter().any(|t| t.text == "Rechnung" && t.bold), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.text == "page 2"), "page 1 only");
+        assert!(ops.iter().any(|o| matches!(o, gridcraft_pdf::Op::Image { pw: 2, ph: 2, .. })));
+        assert!(ops.iter().any(|o| matches!(o, gridcraft_pdf::Op::Line { .. })), "the border");
+        let (_, _, second) = preview_page(&s, &json!({}), 2).unwrap().unwrap();
+        assert!(second.iter().any(|o| matches!(o, gridcraft_pdf::Op::Text(t) if t.text == "page 2")));
+        assert!(preview_page(&s, &json!({}), 3).unwrap().is_none());
     }
 
     #[test]

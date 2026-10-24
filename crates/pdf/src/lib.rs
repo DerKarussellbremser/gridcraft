@@ -102,6 +102,17 @@ impl Font {
         Font::ALL.iter().position(|f| *f == self).unwrap_or(0)
     }
 
+    /// The face's family name, weight and slant: (`Helvetica`, bold, italic).
+    pub fn style(self) -> (&'static str, bool, bool) {
+        let family = match self {
+            Font::Helvetica | Font::HelveticaBold | Font::HelveticaOblique | Font::HelveticaBoldOblique => "Helvetica",
+            Font::TimesRoman | Font::TimesBold | Font::TimesItalic | Font::TimesBoldItalic => "Times",
+            _ => "Courier",
+        };
+        let name = self.base_name();
+        (family, name.contains("Bold"), name.contains("Oblique") || name.contains("Italic"))
+    }
+
     /// The face of `family` with the given weight and slant.
     pub fn styled(family: Family, bold: bool, italic: bool) -> Font {
         match (family, bold, italic) {
@@ -331,6 +342,85 @@ struct LinkAnnotation {
     target: LinkTarget,
 }
 
+/// One thing a page draws, kept when its document records ([`PdfDoc::recording`]) so a preview can
+/// paint exactly what prints without reading the PDF back. Coordinates as for drawing: points,
+/// top-left origin, text `y` the baseline.
+#[derive(Clone, Debug)]
+pub enum Op {
+    Save,
+    Restore,
+    Clip {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    },
+    FillRect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: Rgb,
+    },
+    StrokeRect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        width: f32,
+        color: Rgb,
+    },
+    /// An open line through `pts`; `dash` empty for solid.
+    Line {
+        pts: Vec<[f32; 2]>,
+        width: f32,
+        color: Rgb,
+        dash: Vec<f32>,
+    },
+    Polygon {
+        pts: Vec<[f32; 2]>,
+        fill: Option<Rgb>,
+        stroke: Option<(Rgb, f32)>,
+    },
+    Circle {
+        cx: f32,
+        cy: f32,
+        r: f32,
+        fill: Option<Rgb>,
+        stroke: Option<(Rgb, f32)>,
+    },
+    Text(TextOp),
+    /// RGBA pixels (`pw` × `ph`, straight alpha) drawn into the box.
+    Image {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        rgba: Arc<[u8]>,
+        pw: u32,
+        ph: u32,
+    },
+}
+
+/// Text as drawn: the family it is set in (`Arial`, `Helvetica` for the standard sans) and the
+/// weight and slant it shows, whether its face has them or they are imitated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextOp {
+    pub x: f32,
+    pub y: f32,
+    pub size: f32,
+    /// Clockwise, in radians, about `(x, y)`.
+    pub angle: f32,
+    pub color: Rgb,
+    pub text: String,
+    pub family: String,
+    pub bold: bool,
+    pub italic: bool,
+}
+
+/// Most operations a page records; a hostile workbook can't exhaust memory through a preview.
+const MAX_PAGE_OPS: usize = 1_000_000;
+
 /// A page under construction. Obtain one with [`PdfDoc::add_page`].
 pub struct Page {
     width: f32,
@@ -342,6 +432,8 @@ pub struct Page {
     images: Vec<ImageData>,
     links: Vec<LinkAnnotation>,
     depth: u32,
+    /// What the page draws, when its document records.
+    ops: Option<Vec<Op>>,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -358,6 +450,17 @@ impl Page {
     }
     pub fn height(&self) -> f32 {
         self.height
+    }
+    /// What the page draws, in order; empty unless its document records.
+    pub fn ops(&self) -> &[Op] {
+        self.ops.as_deref().unwrap_or(&[])
+    }
+    fn rec(&mut self, op: Op) {
+        if let Some(ops) = &mut self.ops
+            && ops.len() < MAX_PAGE_OPS
+        {
+            ops.push(op);
+        }
     }
     fn y(&self, y: f32) -> f32 {
         self.height - y
@@ -412,24 +515,28 @@ impl Page {
     pub fn save(&mut self) {
         self.depth = self.depth.saturating_add(1);
         self.content.push_str("q\n");
+        self.rec(Op::Save);
     }
     /// Restores the graphics state saved by [`Page::save`]; extra calls are ignored.
     pub fn restore(&mut self) {
         if self.depth > 0 {
             self.depth -= 1;
             self.content.push_str("Q\n");
+            self.rec(Op::Restore);
         }
     }
     /// Intersects the clip with a rectangle (until the next [`Page::restore`]).
     pub fn clip_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let s = format!("{} {} {} {} re W n", n(x), n(self.y(y + h)), n(w.max(0.0)), n(h.max(0.0)));
         self.op(&s);
+        self.rec(Op::Clip { x, y, w: w.max(0.0), h: h.max(0.0) });
     }
 
     pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgb) {
         if !(extent(w) && extent(h) && finite(&[x, y])) {
             return;
         }
+        self.rec(Op::FillRect { x, y, w, h, color });
         let s = format!("{}\n{} {} {} {} re f", rgb_op(color, false), n(x), n(self.y(y + h)), n(w), n(h));
         self.op(&s);
     }
@@ -438,6 +545,7 @@ impl Page {
         if !finite(&[x, y, w, h]) {
             return;
         }
+        self.rec(Op::StrokeRect { x, y, w, h, width: stroke_width(width), color });
         let s = format!("{}\n{} w [] 0 d\n{} {} {} {} re S", rgb_op(color, true), n(stroke_width(width)), n(x), n(self.y(y + h)), n(w), n(h));
         self.op(&s);
     }
@@ -451,6 +559,7 @@ impl Page {
         if !finite(&[x0, y0, x1, y1]) {
             return;
         }
+        self.rec(Op::Line { pts: vec![[x0, y0], [x1, y1]], width: stroke_width(width), color, dash: dash.to_vec() });
         let s = format!(
             "{}\n{} w [{}] 0 d\n{} {} m {} {} l S",
             rgb_op(color, true),
@@ -469,6 +578,7 @@ impl Page {
         if pts.len() < 2 || !pts.iter().all(|p| finite(p)) {
             return;
         }
+        self.rec(Op::Line { pts: pts.to_vec(), width: stroke_width(width), color, dash: dash.to_vec() });
         let mut s = format!("{}\n{} w [{}] 0 d 1 j\n", rgb_op(color, true), n(stroke_width(width)), dash_values(dash));
         self.path(&mut s, pts, false);
         s.push_str(" S");
@@ -489,6 +599,7 @@ impl Page {
         if pts.len() < 2 || (fill.is_none() && stroke.is_none()) || !pts.iter().all(|p| finite(p)) {
             return;
         }
+        self.rec(Op::Polygon { pts: pts.to_vec(), fill, stroke: stroke.map(|(c, w)| (c, stroke_width(w))) });
         let mut s = String::new();
         if let Some(f) = fill {
             s.push_str(&rgb_op(f, false));
@@ -511,6 +622,7 @@ impl Page {
         if !extent(r) || !finite(&[cx, cy]) || (fill.is_none() && stroke.is_none()) {
             return;
         }
+        self.rec(Op::Circle { cx, cy, r, fill, stroke: stroke.map(|(c, w)| (c, stroke_width(w))) });
         const K: f32 = 0.552_284_8;
         let k = r * K;
         let y = self.y(cy);
@@ -571,6 +683,19 @@ impl Page {
         if text.is_empty() || !extent(size) || !finite(&[x, y]) {
             return;
         }
+        let (family, bold, italic) = font.style();
+        let angle_cw = if angle.is_finite() { angle } else { 0.0 };
+        self.rec(Op::Text(TextOp {
+            x,
+            y,
+            size: size.min(10_000.0),
+            angle: angle_cw,
+            color,
+            text: text.to_string(),
+            family: family.to_string(),
+            bold,
+            italic,
+        }));
         let fi = font.index();
         let size = n(size.min(10_000.0));
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
@@ -600,6 +725,17 @@ impl Page {
         if text.is_empty() || !extent(size) || !finite(&[x, y]) || self.full() {
             return;
         }
+        self.rec(Op::Text(TextOp {
+            x,
+            y,
+            size: size.min(10_000.0),
+            angle: 0.0,
+            color,
+            text: text.to_string(),
+            family: font.family().to_string(),
+            bold: font.is_bold() || synthetic.bold,
+            italic: font.is_italic() || synthetic.italic,
+        }));
         let at = match self.embedded.iter().position(|(f, _)| f.id == font.id) {
             Some(i) => i,
             None => {
@@ -633,6 +769,10 @@ impl Page {
             return;
         }
         let px = px as usize;
+        if self.ops.is_some() {
+            let rgba: Arc<[u8]> = rgba.get(..px * 4).unwrap_or(rgba).into();
+            self.rec(Op::Image { x, y, w, h, rgba, pw, ph });
+        }
         let mut rgb = Vec::with_capacity(px * 3);
         let mut alpha = Vec::with_capacity(px);
         for p in rgba.as_chunks::<4>().0.iter().take(px) {
@@ -660,6 +800,8 @@ pub struct Info {
 pub struct PdfDoc {
     pages: Vec<Page>,
     pub info: Info,
+    /// Pages keep what they draw ([`Page::ops`]).
+    record: bool,
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
@@ -733,6 +875,11 @@ impl PdfDoc {
         PdfDoc::default()
     }
 
+    /// A document whose pages also keep what they draw, for a preview ([`Page::ops`]).
+    pub fn recording() -> PdfDoc {
+        PdfDoc { record: true, ..PdfDoc::default() }
+    }
+
     /// Adds a page of `width_pt` × `height_pt` points and returns it for drawing.
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
@@ -746,6 +893,7 @@ impl PdfDoc {
             images: Vec::new(),
             links: Vec::new(),
             depth: 0,
+            ops: self.record.then(Vec::new),
         });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
@@ -753,6 +901,11 @@ impl PdfDoc {
 
     pub fn page_count(&self) -> usize {
         self.pages.len()
+    }
+
+    /// The page at `i`.
+    pub fn page(&self, i: usize) -> Option<&Page> {
+        self.pages.get(i)
     }
 
     /// The page at `i`, to keep drawing on it.

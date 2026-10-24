@@ -378,3 +378,31 @@ fn embedded_text_carries_a_subset_font_that_reads_back() {
     assert_eq!(sizes[font.glyph('Z') as usize], 0, "unused outlines are left out");
     assert!(sizes.len() > font.glyph('Z') as usize, "every glyph keeps its number");
 }
+
+#[test]
+fn a_recording_document_keeps_what_each_page_draws() {
+    let font = hack();
+    assert_eq!((font.family(), font.is_bold(), font.is_italic()), ("Hack", false, false));
+    let mut doc = PdfDoc::recording();
+    let p = doc.add_page(595.0, 842.0);
+    p.save();
+    p.clip_rect(10.0, 10.0, 100.0, 50.0);
+    p.fill_rect(10.0, 10.0, 20.0, 20.0, [255, 0, 0]);
+    p.text(12.0, 30.0, 10.0, Font::HelveticaBold, [0, 0, 0], "Summe");
+    p.text_embedded(12.0, 45.0, 9.0, &font, Synthetic { bold: true, italic: false }, [0, 0, 0], "Hallo");
+    p.image_rgba(0.0, 0.0, 2.0, 1.0, &[1, 2, 3, 255, 4, 5, 6, 255], 2, 1);
+    p.fill_rect(0.0, 0.0, f32::NAN, 1.0, [0, 0, 0]);
+    p.restore();
+    let ops = doc.page(0).unwrap().ops();
+    assert!(matches!(ops[0], Op::Save) && matches!(ops[1], Op::Clip { w: 100.0, .. }) && matches!(ops[2], Op::FillRect { .. }));
+    let Op::Text(t) = &ops[3] else { panic!("{:?}", ops[3]) };
+    assert_eq!((t.family.as_str(), t.bold, t.italic, t.text.as_str()), ("Helvetica", true, false, "Summe"));
+    let Op::Text(t) = &ops[4] else { panic!("{:?}", ops[4]) };
+    assert_eq!((t.family.as_str(), t.bold, t.y), ("Hack", true, 45.0), "an imitated bold is bold");
+    assert!(matches!(&ops[5], Op::Image { pw: 2, ph: 1, rgba, .. } if rgba.len() == 8));
+    assert!(matches!(ops[6], Op::Restore) && ops.len() == 7, "what isn't drawn isn't recorded");
+    // An ordinary document keeps nothing.
+    let mut doc = PdfDoc::new();
+    doc.add_page(595.0, 842.0).fill_rect(0.0, 0.0, 1.0, 1.0, [0, 0, 0]);
+    assert!(doc.page(0).unwrap().ops().is_empty());
+}

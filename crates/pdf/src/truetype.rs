@@ -140,6 +140,9 @@ pub struct EmbeddedFont {
     num_hmetrics: u16,
     loca_long: bool,
     pub(crate) ps_name: String,
+    /// Legacy family name (name ID 1) and whether this is its bold / italic face.
+    family: String,
+    bold: bool,
     pub(crate) italic: bool,
     ascent: i16,
     descent: i16,
@@ -173,6 +176,8 @@ impl EmbeddedFont {
             .take(60)
             .collect();
         let italic = os2.and_then(|t| u16_at(t, 62)).map_or(u16_at(head, 44).unwrap_or(0) & 2 != 0, |sel| sel & 0x201 != 0);
+        let bold = os2.and_then(|t| u16_at(t, 62)).map_or(u16_at(head, 44).unwrap_or(0) & 1 != 0, |sel| sel & 0x20 != 0);
+        let family: String = names.and_then(|t| name(t, 1)).unwrap_or_default().chars().take(128).collect();
         let ascent = i16_at(hhea, 4)?;
         let cap_height = os2.filter(|t| u16_at(t, 0).is_some_and(|v| v >= 2)).and_then(|t| i16_at(t, 88)).unwrap_or((ascent as f32 * 0.7) as i16);
         let italic_angle = table(&data, &dir, b"post").and_then(|t| u32_at(t, 4)).map_or(0.0, |f| (f as i32) as f32 / 65536.0);
@@ -186,6 +191,8 @@ impl EmbeddedFont {
             ps_name: if ps_name.is_empty() { "Embedded".into() } else { ps_name },
             units_per_em,
             cmap,
+            family,
+            bold,
             italic,
             ascent,
             cap_height,
@@ -194,6 +201,18 @@ impl EmbeddedFont {
             data,
         };
         Some(Arc::new(font))
+    }
+
+    /// The family this face belongs to (name ID 1: `Arial` for Arial Bold, `Arial Black`).
+    pub fn family(&self) -> &str {
+        &self.family
+    }
+    /// Whether this is its family's bold / italic face.
+    pub fn is_bold(&self) -> bool {
+        self.bold
+    }
+    pub fn is_italic(&self) -> bool {
+        self.italic
     }
 
     /// The glyph for `c` (0, the missing-glyph box, when the face has none).
