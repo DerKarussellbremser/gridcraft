@@ -23,6 +23,7 @@ gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 image = { workspace = true }
+sys-locale = { workspace = true }
 
 [dev-dependencies]
 # A real TrueType face for the PDF embedding tests (fonts are never committed here).

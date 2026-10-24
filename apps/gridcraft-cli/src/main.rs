@@ -99,6 +99,7 @@ fn stdout_failed(e: std::io::Error) -> ! {
 }
 
 fn main() -> ExitCode {
+    gridcraft_engine::use_system_paper();
     let args = match take_locale(std::env::args().skip(1).collect()) {
         Ok((args, locale)) => {
             if let Some(locale) = locale {
