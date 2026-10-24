@@ -2540,7 +2540,7 @@ mod tests {
         let wb = std::sync::Arc::make_mut(&mut d.wb);
         let id = wb.next_object_id();
         let anchor = Anchor { cell: CellRef::new(7, 0), dx: 0.0, dy: 0.0, width: 40.0, height: 20.0, mode: gridcraft_model::AnchorMode::MoveAndSize };
-        wb.sheet_mut(0).unwrap().images.push(Image { id, anchor, data: png.into(), mime: "image/png".into(), alt: String::new() });
+        wb.sheet_mut(0).unwrap().images.push(Image { id, anchor, data: png.into(), mime: "image/png".into(), alt: String::new(), preview: false });
         let (pdf, _) = pdf_of(&mut s, json!({}));
         let text = String::from_utf8_lossy(&pdf);
         // The picture: `q w 0 0 h x y cm /Im1 Do Q`, its top at y + h (PDF y grows up).
