@@ -1067,6 +1067,9 @@ fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: 
     if w <= 0.0 || h <= 0.0 || data.len() > 16 * 1024 * 1024 {
         return;
     }
+    // An EMF or WMF prints the bitmap it carries.
+    let raster = crate::metafile::raster(data);
+    let data = raster.as_deref().unwrap_or(data);
     let Some((iw, ih)) = crate::io::image_size(data) else { return };
     if iw == 0 || ih == 0 || iw > 8192 || ih > 8192 || u64::from(iw) * u64::from(ih) > 16_000_000 {
         return;
@@ -1294,6 +1297,8 @@ fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
 
 /// Decodes an embedded picture to RGBA, downscaled to at most `max_w`×`max_h` pixels.
 fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u32)> {
+    let raster = crate::metafile::raster(data);
+    let data = raster.as_deref().unwrap_or(data);
     let (w, h) = crate::io::image_size(data)?;
     if w == 0 || h == 0 || w as u64 * h as u64 > 60_000_000 {
         return None;
@@ -2138,6 +2143,7 @@ mod tests {
             data: png.into(),
             mime: "image/png".into(),
             alt: String::new(),
+            preview: false,
         });
         let charts = s.doc().unwrap().wb.active().unwrap().charts.len();
         let (pdf, _) = pdf_of(&mut s, json!({}));

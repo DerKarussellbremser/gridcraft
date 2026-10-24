@@ -516,7 +516,8 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static s
             return Some(("chart", ch.id, r));
         }
     }
-    for im in sh.images.iter().rev() {
+    // An embedded object's preview isn't a picture to select: moving it would not move the object.
+    for im in sh.images.iter().rev().filter(|im| !im.preview) {
         let r = anchor_rect(geo, sh, &im.anchor);
         if r.contains(p) && geo.cells.contains(p) {
             return Some(("image", im.id, r));

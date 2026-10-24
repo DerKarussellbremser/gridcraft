@@ -156,7 +156,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                     };
                     let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
                     let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
+                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt, preview: false });
                 }
                 "graphicFrame" => {
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
@@ -261,6 +261,53 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
         });
     }
     f
+}
+
+/// The pictures a sheet's embedded objects show (`<oleObject progId="Word.Picture.8">` with its
+/// `<objectPr r:id>` preview and `<anchor>`), as display-only images. The objects themselves are
+/// kept by the pass-through, so these are never written back as pictures.
+pub(crate) fn ole_previews(cx: &mut Ctx<'_>, sheet_part: &str, sheet: &mut Sheet) {
+    let Some(kept) = sheet.preserved.clone() else { return };
+    let Some(el) = kept.elements.iter().find(|e| e.slot == "oleObjects") else { return };
+    let Ok(x) = crate::xml::parse(el.xml.as_bytes()) else { return };
+    let rels = cx.pkg.rels(sheet_part).unwrap_or_default();
+    // Excel 2010+ puts the anchored form in `mc:Choice` (sometimes around `<oleObjects>` too);
+    // the `mc:Fallback` copy has no preview and would only repeat the object.
+    fn collect<'a>(e: &'a El, out: &mut Vec<&'a El>, depth: usize) {
+        match e.name.as_str() {
+            "Fallback" => {}
+            "oleObject" => out.push(e),
+            _ if depth < 8 => e.children.iter().for_each(|c| collect(c, out, depth + 1)),
+            _ => {}
+        }
+    }
+    let mut objects = Vec::new();
+    collect(&x, &mut objects, 0);
+    for o in objects {
+        let Some(pr) = o.child("objectPr") else { continue };
+        let (Some(a), Some(rid)) = (pr.child("anchor"), pr.attr("id")) else { continue };
+        let Some(rel) = rels.iter().find(|r| r.id == rid && !r.external) else { continue };
+        let Ok(Some(data)) = cx.pkg.read(&rel.target) else { continue };
+        let (Some(from), Some(to)) = (a.child("from").map(marker), a.child("to").map(marker)) else { continue };
+        let ((cell, dx, dy), (end, edx, edy)) = (from, to);
+        let width = (sheet.col_left(end.col) + edx as f64 - sheet.col_left(cell.col) - dx as f64).max(0.0) as f32;
+        let height = (sheet.row_top(end.row) + edy as f64 - sheet.row_top(cell.row) - dy as f64).max(0.0) as f32;
+        let mode = match (a.flag("moveWithCells", false), a.flag("sizeWithCells", false)) {
+            (_, true) => AnchorMode::MoveAndSize,
+            (true, false) => AnchorMode::MoveOnly,
+            _ => AnchorMode::Absolute,
+        };
+        let alt = o.attr("progId").unwrap_or("").to_string();
+        let id = cx.next_object_id();
+        sheet.images.push(Image {
+            id,
+            anchor: Anchor { cell, dx, dy, width, height, mode },
+            data: data.into(),
+            mime: mime_for(&rel.target).to_string(),
+            alt,
+            preview: true,
+        });
+    }
 }
 
 // ---------------------------------------------------------------- writing

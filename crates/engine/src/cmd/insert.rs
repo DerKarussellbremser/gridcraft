@@ -1051,6 +1051,7 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         data: data.into(),
         mime,
         alt: str_param(p, "alt").unwrap_or("").into(),
+        preview: false,
     };
     let sheet = d.wb.active_sheet;
     edit(s, |cx| {

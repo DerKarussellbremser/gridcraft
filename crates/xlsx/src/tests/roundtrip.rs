@@ -349,6 +349,7 @@ fn sample() -> Workbook {
         data: png.into(),
         mime: "image/png".into(),
         alt: "Logo \"x\"".into(),
+        preview: false,
     });
     s.shapes.push(Shape {
         id: 11,

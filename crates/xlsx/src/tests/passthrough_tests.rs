@@ -212,6 +212,21 @@ fn linked_workbooks_bring_their_cached_values() {
     assert!(wb.external_sheet("[2]Sheet1").is_none());
 }
 
+/// An embedded object shows its preview picture where it is anchored; saving keeps the object
+/// and never adds the preview as a picture of its own.
+#[test]
+fn embedded_objects_show_their_preview_and_save_once() {
+    let (wb, _) = read_xlsx(&rich_package()).unwrap();
+    let previews = |wb: &gridcraft_model::Workbook| -> Vec<(gridcraft_core::CellRef, String)> {
+        wb.sheets.iter().flat_map(|s| s.images.iter().filter(|i| i.preview).map(|i| (i.anchor.cell, i.alt.clone()))).collect()
+    };
+    assert_eq!(previews(&wb), [(gridcraft_core::CellRef::new(1, 1), "Package".to_string())]);
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(previews(&back), previews(&wb), "the object is read again, the preview not duplicated");
+    assert!(back.sheets.iter().all(|s| s.images.iter().all(|i| i.preview)), "no picture was added");
+}
+
 /// Updated link values and a changed source are saved, so the next open (here or in Excel)
 /// sees them; the rest of the link part stays as it was.
 #[test]

@@ -16,6 +16,7 @@ pub mod fill;
 pub mod import_text;
 pub mod io;
 pub mod links;
+pub mod metafile;
 pub mod outline;
 pub mod paper;
 pub mod pivot;

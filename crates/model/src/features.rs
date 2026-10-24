@@ -565,6 +565,10 @@ pub struct Image {
     pub data: std::sync::Arc<Vec<u8>>,
     pub mime: String,
     pub alt: String,
+    /// The picture an embedded object (OLE: a Word picture, a document) shows. It is drawn and
+    /// printed like a picture but never saved as one: the object itself is kept for saving.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preview: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -664,6 +664,19 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
 
 /// Pixel size of a PNG or JPEG from its header.
 pub fn image_size(data: &[u8]) -> Option<(u32, u32)> {
+    // BMP (what a metafile's bitmap becomes): BITMAPINFOHEADER sizes are signed (a negative
+    // height is a top-down bitmap), a BITMAPCOREHEADER's are 16-bit.
+    if data.starts_with(b"BM") {
+        let header = u32::from_le_bytes(data.get(14..18)?.try_into().ok()?);
+        if header == 12 {
+            let w = u16::from_le_bytes(data.get(18..20)?.try_into().ok()?);
+            let h = u16::from_le_bytes(data.get(20..22)?.try_into().ok()?);
+            return Some((u32::from(w), u32::from(h)));
+        }
+        let w = i32::from_le_bytes(data.get(18..22)?.try_into().ok()?);
+        let h = i32::from_le_bytes(data.get(22..26)?.try_into().ok()?);
+        return Some((w.unsigned_abs(), h.unsigned_abs()));
+    }
     if data.starts_with(&[0x89, b'P', b'N', b'G']) {
         let w = u32::from_be_bytes(data.get(16..20)?.try_into().ok()?);
         let h = u32::from_be_bytes(data.get(20..24)?.try_into().ok()?);
@@ -720,6 +733,7 @@ mod tests {
             data: vec![1, 2, 3].into(),
             mime: "image/png".into(),
             alt: "a \"logo\"".into(),
+            preview: false,
         });
         let html = to_html(&wb, 0).unwrap();
         assert!(
@@ -742,6 +756,7 @@ mod tests {
             data: vec![1].into(),
             mime: "image/png".into(),
             alt: String::new(),
+            preview: false,
         });
         sh.set_value(CellRef::new(1, 1), gridcraft_core::Value::Number(1.0));
         let html = to_html(&wb, 0).unwrap();
@@ -768,6 +783,7 @@ mod tests {
             data: vec![1].into(),
             mime: "image/png".into(),
             alt: String::new(),
+            preview: false,
         });
         wb
     }

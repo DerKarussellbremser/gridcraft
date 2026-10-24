@@ -515,14 +515,15 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
     }
 
-    // Drawing: pictures, charts, shapes.
-    if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
+    // Drawing: pictures, charts, shapes. An embedded object's preview is not a picture of its
+    // own: the object, kept by the pass-through, carries it.
+    if sheet.images.iter().any(|i| !i.preview) || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
         out.drawings += 1;
         let dn = out.drawings;
         let mut drels = Rels::default();
         let mut objs: Vec<Obj<'_>> = vec![];
         for img in &sheet.images {
-            if img.data.is_empty() {
+            if img.data.is_empty() || img.preview {
                 continue;
             }
             let ext = image_ext(&img.mime, &img.data);

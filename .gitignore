@@ -8,3 +8,14 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+# Spreadsheets never go into the repository (test workbooks are built in code; real files hold
+# other people's data).
+*.xlsx
+*.xlsm
+*.xlsb
+*.xls
+*.xltx
+*.xltm
+*.ods
+*.csv
+/tabellen/
