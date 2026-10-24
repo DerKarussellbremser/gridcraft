@@ -455,11 +455,14 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let v = c.child("v").map(|v| v.text.as_str());
     // Formatted runs of the cell's string (rich text), kept beside the cell.
     let mut rich = None;
+    // Its own phonetic reading, when its string's differs from the workbook's for that text.
+    let mut reading = None;
     let value = match c.attr("t").unwrap_or("n") {
         "s" => match v.and_then(|v| v.trim().parse::<usize>().ok()) {
             Some(i) => match cx.sst.get(i) {
                 Some(s) => {
                     rich = cx.sst_rich.get(i).cloned().flatten();
+                    reading = cx.sst_reading.get(i).cloned().flatten();
                     Value::Text(s.clone())
                 }
                 None => {
@@ -526,6 +529,9 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     // A formula's result is set in the cell's font.
     if let Some(rich) = rich.filter(|_| formula.is_none()) {
         sheet.rich.insert(pos, rich);
+    }
+    if let Some(reading) = reading.filter(|_| formula.is_none()) {
+        sheet.readings.insert(pos, reading);
     }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }

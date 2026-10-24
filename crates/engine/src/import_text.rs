@@ -71,10 +71,6 @@ const DE: &[(&str, &str)] = &[
     ("some numeric cells could not be read", "Einige Zahlenzellen konnten nicht gelesen werden."),
     ("shared strings are damaged ({}); kept {} strings", "Die gemeinsamen Zeichenfolgen sind beschädigt ({}); {} Zeichenfolgen wurden übernommen."),
     (
-        "shared strings: {} phonetic readings were dropped because another <si> with the same text already had one",
-        "Gemeinsame Zeichenfolgen: {} Lesungen (Furigana) wurden entfernt, weil derselbe Text bereits eine hatte.",
-    ),
-    (
         "shared strings: {} phonetic runs were dropped (bad sb/eb or no reading)",
         "Gemeinsame Zeichenfolgen: {} Lesungen (Furigana) wurden entfernt (ungültig oder leer).",
     ),
