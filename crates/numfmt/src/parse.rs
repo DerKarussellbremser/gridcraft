@@ -488,7 +488,8 @@ fn analyze(raw: Raw) -> Section {
                 continue;
             }
             match t {
-                Tok::Date(_) | Tok::Fill(_) => out.push(t.clone()),
+                // An unquoted `/` stays a token: it shows the region's date separator.
+                Tok::Date(_) | Tok::Fill(_) | Tok::Slash => out.push(t.clone()),
                 other => push_lit(&mut out, &other.literal_text()),
             }
             i += 1;

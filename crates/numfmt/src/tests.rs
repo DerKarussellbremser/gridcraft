@@ -950,8 +950,14 @@ mod german {
         let names = (1..=12).map(|m| de("mmm mmmm", 46022.0 + 31.0 * (m - 1) as f64)).collect::<Vec<_>>();
         assert_eq!(names[2], "Mrz März");
         assert_eq!(names[4], "Mai Mai");
-        // A custom code that only looks like a built-in keeps its own shape.
-        assert_eq!(de("d/m/yyyy", d), "15/10/2026");
+        // An unquoted `/` is the German date separator, a quoted or escaped one stays (observed);
+        // a fraction bar is no date separator.
+        assert_eq!(de("d/m/yyyy", d), "15.10.2026");
+        assert_eq!(de("d/ mmm/ yy", d), "15. Okt. 26");
+        assert_eq!(de("yyyy/mm/dd", d), "2026.10.15");
+        assert_eq!(de("d\"/\"m\\/yyyy", d), "15/10/2026");
+        assert_eq!(de("# ?/?", 1.5), "1 1/2");
+        assert_eq!(f("d/m/yyyy", d), "15/10/2026");
     }
 
     #[test]

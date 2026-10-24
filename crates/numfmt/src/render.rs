@@ -130,6 +130,8 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, loc: Locale) -
                 };
                 out.push(&s);
             }
+            // An unquoted `/` is the date separator of the region; `"/"` and `\/` stay.
+            Tok::Slash => out.push(&loc.date_separator().to_string()),
             Tok::Fill(c) => out.fill(*c),
             other => out.push(&other.literal_text()),
         }

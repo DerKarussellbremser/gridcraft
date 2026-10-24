@@ -23,6 +23,11 @@ impl Locale {
     pub fn thousands(self) -> char {
         if self == Self::De { '.' } else { ',' }
     }
+    /// What an unquoted `/` in a date format shows: the region's date separator (observed in
+    /// Excel de-DE: `d/m/yyyy` is `15.10.2026`, `d/ mmm/ yy` is `15. Okt. 26`).
+    pub fn date_separator(self) -> char {
+        if self == Self::De { '.' } else { '/' }
+    }
     /// `mmmm`; `month` is 1-based.
     pub fn month(self, month: u32) -> &'static str {
         let i = (month as usize).wrapping_sub(1);
