@@ -344,3 +344,21 @@ fn a_recording_document_keeps_what_each_page_draws() {
     doc.add_page(595.0, 842.0).fill_rect(0.0, 0.0, 1.0, 1.0, [0, 0, 0]);
     assert!(doc.page(0).unwrap().ops().is_empty());
 }
+
+#[test]
+fn a_full_page_records_no_more_than_its_pdf_draws() {
+    let mut doc = PdfDoc::recording();
+    let p = doc.add_page(595.0, 842.0);
+    // Past the page's content limit (64 MiB), as a huge cell can take it.
+    let big = "x".repeat(8 * 1024 * 1024);
+    for _ in 0..9 {
+        p.text(0.0, 10.0, 10.0, Font::Helvetica, [0, 0, 0], &big);
+    }
+    let before = p.ops().len();
+    p.save();
+    p.clip_rect(0.0, 0.0, 10.0, 10.0);
+    p.fill_rect(0.0, 0.0, 1.0, 1.0, [0, 0, 0]);
+    p.image_rgba(0.0, 0.0, 1.0, 1.0, &[0, 0, 0, 255], 1, 1);
+    p.restore();
+    assert_eq!(p.ops().len(), before, "what the PDF leaves out, the preview doesn't show");
+}

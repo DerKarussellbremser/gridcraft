@@ -439,8 +439,12 @@ impl Page {
     pub fn ops(&self) -> &[Op] {
         self.ops.as_deref().unwrap_or(&[])
     }
+    /// Records `op` when the document records, unless the page is full: then the PDF leaves it
+    /// out too. Call it before the operation writes its content.
     fn rec(&mut self, op: Op) {
+        let full = self.full();
         if let Some(ops) = &mut self.ops
+            && !full
             && ops.len() < MAX_PAGE_OPS
         {
             ops.push(op);
@@ -498,22 +502,22 @@ impl Page {
     /// Saves the graphics state (pair with [`Page::restore`]).
     pub fn save(&mut self) {
         self.depth = self.depth.saturating_add(1);
-        self.content.push_str("q\n");
         self.rec(Op::Save);
+        self.content.push_str("q\n");
     }
     /// Restores the graphics state saved by [`Page::save`]; extra calls are ignored.
     pub fn restore(&mut self) {
         if self.depth > 0 {
             self.depth -= 1;
-            self.content.push_str("Q\n");
             self.rec(Op::Restore);
+            self.content.push_str("Q\n");
         }
     }
     /// Intersects the clip with a rectangle (until the next [`Page::restore`]).
     pub fn clip_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.rec(Op::Clip { x, y, w: w.max(0.0), h: h.max(0.0) });
         let s = format!("{} {} {} {} re W n", n(x), n(self.y(y + h)), n(w.max(0.0)), n(h.max(0.0)));
         self.op(&s);
-        self.rec(Op::Clip { x, y, w: w.max(0.0), h: h.max(0.0) });
     }
 
     pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgb) {
@@ -711,7 +715,7 @@ impl Page {
             return;
         }
         let px = px as usize;
-        if self.ops.is_some() {
+        if self.ops.is_some() && !self.full() {
             let rgba: Arc<[u8]> = rgba.get(..px * 4).unwrap_or(rgba).into();
             self.rec(Op::Image { x, y, w, h, rgba, pw, ph });
         }
