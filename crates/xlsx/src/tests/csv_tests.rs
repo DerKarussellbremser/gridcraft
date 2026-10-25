@@ -183,6 +183,23 @@ fn delimiter_sniffing() {
     assert!(read_csv(b"a", &CsvOptions { delimiter: b'"', ..Default::default() }).is_err());
 }
 
+/// A German bank export (made-up data): `\r\r\n` line ends, dates as `TT.MM.JJJJ` with days on
+/// both sides of 12, amounts with a decimal comma, read in the German regional setting as Excel
+/// de-DE reads it: no empty row between records, every date the right day, every amount a number.
+#[test]
+fn a_german_bank_export() {
+    let csv = "Konto;Buchungstag;Valuta;Betrag\r\r\nX;13.02.2026;05.02.2026;-1.234,56\r\r\nY;01.12.2025;31.12.2025;20,00\r\r\n";
+    let de = CsvOptions { delimiter: 0, locale: gridcraft_core::Locale::De, ..Default::default() };
+    let wb = read_csv(csv.as_bytes(), &de).unwrap();
+    let date = |y, m, d| Value::Number(gridcraft_core::date::serial_from_ymd(DateSystem::D1900, y, m, d).unwrap());
+    assert_eq!((v(&wb, 1, 1), v(&wb, 1, 2), v(&wb, 1, 3)), (date(2026, 2, 13), date(2026, 2, 5), Value::Number(-1234.56)));
+    assert_eq!((v(&wb, 2, 1), v(&wb, 2, 2), v(&wb, 2, 3)), (date(2025, 12, 1), date(2025, 12, 31), Value::Number(20.0)));
+    assert_eq!(wb.sheet(0).and_then(|s| s.used_range()).map(|r| r.end.row), Some(2), "no empty rows between the records");
+    // CRs alone stay a line end each.
+    let mac = read_csv(b"a\r\rb", &CsvOptions::default()).unwrap();
+    assert_eq!((v(&mac, 0, 0), v(&mac, 2, 0)), (Value::text("a"), Value::text("b")));
+}
+
 #[test]
 fn writing() {
     let mut wb = Workbook::new();

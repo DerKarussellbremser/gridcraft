@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::parse::parse_input;
+use gridcraft_core::parse::parse_input_in;
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
@@ -225,8 +225,17 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
             }
             field_started_quoted = false;
         } else if c == '\r' || c == '\n' {
-            if c == '\r' && chars.peek() == Some(&'\n') {
-                chars.next();
+            // CR LF ends a line, and so do several CRs before an LF (`\r\r\n`, as some bank
+            // exports write: converted twice); CRs alone stay a line end each.
+            if c == '\r' {
+                let mut ahead = chars.clone();
+                while ahead.peek() == Some(&'\r') {
+                    ahead.next();
+                }
+                if ahead.peek() == Some(&'\n') {
+                    ahead.next();
+                    chars = ahead;
+                }
             }
             let f = std::mem::take(&mut field);
             if record.len() < MAX_COLS as usize {
@@ -276,7 +285,7 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
             }
             let pos = CellRef::new(row, col as u32);
             let cell = if opts.parse_values {
-                let p = parse_input(&f, opts.date_system);
+                let p = parse_input_in(&f, opts.date_system, opts.locale);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,

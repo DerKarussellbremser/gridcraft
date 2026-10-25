@@ -162,11 +162,14 @@ pub struct CsvOptions {
     pub date_system: DateSystem,
     /// Interpret fields like typed input (numbers, dates, booleans…); otherwise keep text.
     pub parse_values: bool,
+    /// How the file writes numbers and dates (`15.10.2026`, `-1.234,56` in German), as Excel
+    /// reads a CSV in the regional setting.
+    pub locale: gridcraft_core::Locale,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true }
+        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, locale: gridcraft_core::Locale::En }
     }
 }
 

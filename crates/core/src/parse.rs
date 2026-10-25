@@ -39,6 +39,52 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     Parsed { value: Value::text(s), format: None }
 }
 
+/// [`parse_input`] for text written the way `locale` writes it, as a CSV file from that region
+/// is: in German `15.10.2026` is the 15th of October, `-1.234,56` a number and `WAHR` a boolean,
+/// while `1.5` or `TRUE` stay text (no German reading makes them a number or a boolean).
+pub fn parse_input_in(s: &str, sys: DateSystem, locale: crate::Locale) -> Parsed {
+    if locale == crate::Locale::En || s.is_empty() || s.starts_with('\'') {
+        return parse_input(s, sys);
+    }
+    let t = s.trim();
+    for value in [true, false] {
+        if t.eq_ignore_ascii_case(locale.boolean(value)) {
+            return Parsed { value: Value::Bool(value), format: None };
+        }
+    }
+    let number = |p: Parsed| matches!(p.value, Value::Number(_)).then_some(p);
+    // `TT.MM.JJJJ`, with a time after a space: read as `m/d/yyyy` is.
+    let mut words = t.splitn(2, ' ');
+    if let (Some(date), rest) = (words.next(), words.next())
+        && let [d, m, y] = date.split('.').collect::<Vec<_>>().as_slice()
+        && [d, m, y].iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    {
+        let english = rest.map_or(format!("{m}/{d}/{y}"), |r| format!("{m}/{d}/{y} {r}"));
+        return number(parse_input(&english, sys)).unwrap_or_else(|| Parsed { value: Value::text(s), format: None });
+    }
+    // Decimal comma and thousands point: `-1.234,56` is `-1,234.56`.
+    let swapped: String = t
+        .chars()
+        .map(|c| {
+            if c == '.' {
+                ','
+            } else if c == ',' {
+                '.'
+            } else {
+                c
+            }
+        })
+        .collect();
+    if let Some(p) = number(parse_input(&swapped, sys)) {
+        return p;
+    }
+    // Errors read the same; any other English reading (`1.5`, `TRUE`) is not this region's.
+    match parse_input(s, sys) {
+        p @ Parsed { value: Value::Error(_), .. } => p,
+        _ => Parsed { value: Value::text(s), format: None },
+    }
+}
+
 /// Numeric text as arithmetic coerces it ("1,000", "50%", "$3", "1/2/2020", "10:00").
 pub fn parse_number_text(s: &str) -> Option<f64> {
     parse_number_text_in(s, DateSystem::D1900)
@@ -390,6 +436,23 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// German writing as a German CSV holds it: day first, decimal comma; no English reading.
+    #[test]
+    fn german_writing() {
+        let de = |s: &str| parse_input_in(s, DateSystem::D1900, crate::Locale::De).value;
+        let date = |y, m, d| Value::Number(crate::date::serial_from_ymd(DateSystem::D1900, y, m, d).unwrap());
+        assert_eq!((de("13.02.2026"), de("05.02.2026")), (date(2026, 2, 13), date(2026, 2, 5)));
+        assert_eq!(
+            (de("-1.234,56"), de("20,00"), de("12,5%"), de("1.234")),
+            (Value::Number(-1234.56), Value::Number(20.0), Value::Number(0.125), Value::Number(1234.0))
+        );
+        assert_eq!(
+            (de("WAHR"), de("TRUE"), de("Volksbank"), de("32.13.2026")),
+            (Value::Bool(true), Value::text("TRUE"), Value::text("Volksbank"), Value::text("32.13.2026"))
+        );
+        assert_eq!(parse_input_in("13.02.2026", DateSystem::D1900, crate::Locale::En).value, Value::text("13.02.2026"), "English as before");
+    }
 
     fn p(s: &str) -> Parsed {
         parse_input(s, DateSystem::D1900)
