@@ -225,8 +225,17 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
             }
             field_started_quoted = false;
         } else if c == '\r' || c == '\n' {
-            if c == '\r' && chars.peek() == Some(&'\n') {
-                chars.next();
+            // CR LF ends a line, and so do several CRs before an LF (`\r\r\n`, as some bank
+            // exports write: converted twice); CRs alone stay a line end each.
+            if c == '\r' {
+                let mut ahead = chars.clone();
+                while ahead.peek() == Some(&'\r') {
+                    ahead.next();
+                }
+                if ahead.peek() == Some(&'\n') {
+                    ahead.next();
+                    chars = ahead;
+                }
             }
             let f = std::mem::take(&mut field);
             if record.len() < MAX_COLS as usize {

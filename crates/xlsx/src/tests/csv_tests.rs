@@ -183,6 +183,17 @@ fn delimiter_sniffing() {
     assert!(read_csv(b"a", &CsvOptions { delimiter: b'"', ..Default::default() }).is_err());
 }
 
+/// `\r\r\n` line ends (some bank exports, converted twice) are one line end each: no empty row
+/// after every record. CRs alone stay a line end each.
+#[test]
+fn cr_cr_lf_ends_one_line() {
+    let wb = read_csv(b"a;b\r\r\n1;2\r\r\n3;4\r\r\n", &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!((v(&wb, 1, 1), v(&wb, 2, 0)), (Value::Number(2.0), Value::Number(3.0)));
+    assert_eq!(wb.sheet(0).and_then(|s| s.used_range()).map(|r| r.end.row), Some(2));
+    let mac = read_csv(b"a\r\rb", &CsvOptions::default()).unwrap();
+    assert_eq!((v(&mac, 0, 0), v(&mac, 2, 0)), (Value::text("a"), Value::text("b")));
+}
+
 #[test]
 fn writing() {
     let mut wb = Workbook::new();
