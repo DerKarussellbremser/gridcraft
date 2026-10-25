@@ -192,6 +192,13 @@ fn cr_cr_lf_ends_one_line() {
     assert_eq!(wb.sheet(0).and_then(|s| s.used_range()).map(|r| r.end.row), Some(2));
     let mac = read_csv(b"a\r\rb", &CsvOptions::default()).unwrap();
     assert_eq!((v(&mac, 0, 0), v(&mac, 2, 0)), (Value::text("a"), Value::text("b")));
+    // A long run of CRs is read once, not again for each CR (that took about 2·10¹⁰ steps
+    // for these 200,000, minutes; now it is one pass).
+    let mut long = b"a".to_vec();
+    long.extend(std::iter::repeat_n(b'\r', 200_000));
+    long.push(b'b');
+    let wb = read_csv(&long, &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 200_000, 0), Value::text("b"));
 }
 
 #[test]

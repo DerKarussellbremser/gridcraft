@@ -226,15 +226,16 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
             field_started_quoted = false;
         } else if c == '\r' || c == '\n' {
             // CR LF ends a line, and so do several CRs before an LF (`\r\r\n`, as some bank
-            // exports write: converted twice); CRs alone stay a line end each.
+            // exports write: converted twice); CRs alone stay a line end each. The run of CRs is
+            // read once, whatever its length: the CRs after the first, with no LF after them,
+            // are that many empty lines.
+            let mut empty_lines = 0usize;
             if c == '\r' {
-                let mut ahead = chars.clone();
-                while ahead.peek() == Some(&'\r') {
-                    ahead.next();
+                while chars.next_if_eq(&'\r').is_some() {
+                    empty_lines += 1;
                 }
-                if ahead.peek() == Some(&'\n') {
-                    ahead.next();
-                    chars = ahead;
+                if chars.next_if_eq(&'\n').is_some() {
+                    empty_lines = 0;
                 }
             }
             let f = std::mem::take(&mut field);
@@ -244,6 +245,11 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
             field_started_quoted = false;
             if !on_record(std::mem::take(&mut record)) {
                 return;
+            }
+            for _ in 0..empty_lines {
+                if !on_record(vec![String::new()]) {
+                    return;
+                }
             }
         } else {
             field.push(c);
