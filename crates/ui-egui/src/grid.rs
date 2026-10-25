@@ -3423,7 +3423,6 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let mut close = false;
     let resp = egui::Area::new(egui::Id::new("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(200.0);
             let insert_copied = insert_copied_item(app);
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
@@ -3451,12 +3450,23 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 items.insert(6, item);
             }
             let lang = crate::i18n::current(ui.ctx());
+            // As wide as the longest item in the UI's language, on one line each: a German item
+            // wrapping in a fixed width made the menu jump when hovered.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            let widest = items
+                .iter()
+                .filter(|(label, _)| *label != "-")
+                .map(|(label, _)| ui.painter().layout_no_wrap(lang.tr(label).to_string(), font.clone(), Color32::WHITE).size().x)
+                .fold(0.0_f32, f32::max);
+            let width = (widest + 2.0 * ui.spacing().button_padding.x + 8.0).max(190.0);
+            ui.set_min_width(width + 10.0);
             for (label, id) in items {
                 if label == "-" {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(190.0, 20.0))).clicked() {
+                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(width, 20.0))).clicked() {
                     close = true;
                     match id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
@@ -3563,6 +3573,8 @@ fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet
     let mut chosen = None;
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(190.0);
+        // One line per item whatever the language: wrapping made the menu jump when hovered.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         for (label, mode) in FILL_MODES {
             if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
                 chosen = Some(mode);
@@ -3593,6 +3605,8 @@ fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let response = egui::Area::new(egui::Id::new("fill_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(190.0);
+            // One line per item whatever the language: wrapping made the menu jump when hovered.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             let items = [FILL_MODES[0], FILL_MODES[1], FILL_MODES[2], FILL_MODES[3], ("-", ""), ("Series…", "ui:series")];
             let lang = crate::i18n::current(ui.ctx());
             for (label, mode) in items {
@@ -3625,6 +3639,7 @@ fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let resp = egui::Area::new(egui::Id::new("object_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             let mut items = vec![("Delete", "object.delete")];
             if kind == "chart" {
                 items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
@@ -3914,6 +3929,8 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let response = egui::Area::new(egui::Id::new("header_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(190.0);
+            // One line per item whatever the language: wrapping made the menu jump when hovered.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             let insert_copied = insert_copied_item(app);
             let mut items: Vec<(&str, &str)> = if rows {
                 vec![
