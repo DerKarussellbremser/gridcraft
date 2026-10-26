@@ -1094,7 +1094,8 @@ impl PdfDoc {
             let body = std::mem::take(&mut page.content);
             let mut o = format!("<< /Length {} >>\nstream\n", body.len()).into_bytes();
             o.extend_from_slice(body.as_bytes());
-            o.extend_from_slice(b"endstream");
+            // The end of line before `endstream` is not the stream's (PDF/A checks /Length).
+            o.extend_from_slice(b"\nendstream");
             objects.push((content_id, o));
             let xo = if xobjects.is_empty() { String::new() } else { format!(" /XObject << {xobjects}>>") };
             let mut link_refs = String::new();
