@@ -267,13 +267,15 @@ impl Sheet {
         let style = self.style_id(c);
         self.set_cell(c, Cell { value: v, formula: None, style });
     }
-    /// Replaces content, removing any picture at this address. Style-only edits use set_style.
+    /// Replaces content, removing any picture and the cell's own phonetic reading at this address.
+    /// Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
         self.cell_pictures.remove(&c);
         // A phonetic reading belongs to the content it was read with.
         self.readings.remove(&c);
         self.cells.set(c, cell);
     }
+    /// Removes a cell, with its picture and its own phonetic reading; returns what it held.
     pub fn remove_cell(&mut self, c: CellRef) -> Option<Cell> {
         self.cell_pictures.remove(&c);
         self.readings.remove(&c);

@@ -90,12 +90,14 @@ pub struct Sst {
     /// text.
     list: Vec<(String, Option<std::sync::Arc<PhoneticString>>)>,
     map: HashMap<String, u32>,
-    /// Items with a reading of their own, by text.
-    reading_map: HashMap<String, Vec<u32>>,
+    /// Items with a reading of their own, by that reading (which holds its text): one lookup a
+    /// cell, however many readings a text has.
+    reading_map: HashMap<std::sync::Arc<PhoneticString>, u32>,
     pub count: u64,
 }
 
 impl Sst {
+    /// The item for `s` without a reading of its own, added the first time.
     pub fn index(&mut self, s: &str) -> u32 {
         self.count += 1;
         if let Some(&i) = self.map.get(s) {
@@ -106,12 +108,14 @@ impl Sst {
         self.map.insert(s.to_string(), i);
         i
     }
-    /// The item for `s` with a phonetic reading of its own (one without runs: none).
+    /// The item for `s` with a phonetic reading of its own (one without runs: none). A reading
+    /// made for other text is stale: the plain item then.
     pub fn index_reading(&mut self, s: &str, reading: &std::sync::Arc<PhoneticString>) -> u32 {
+        if reading.text != s {
+            return self.index(s);
+        }
         self.count += 1;
-        let list = &self.list;
-        let same = |i: &u32| list.get(*i as usize).and_then(|(_, p)| p.as_ref()).is_some_and(|p| **p == **reading);
-        if let Some(&i) = self.reading_map.get(s).and_then(|ids| ids.iter().find(|i| same(i))) {
+        if let Some(&i) = self.reading_map.get(reading) {
             return i;
         }
         // The text's plain item comes first, even unused (`count` counts cell references only): a
@@ -122,7 +126,7 @@ impl Sst {
         }
         let i = self.list.len() as u32;
         self.list.push((s.to_string(), Some(reading.clone())));
-        self.reading_map.entry(s.to_string()).or_default().push(i);
+        self.reading_map.insert(reading.clone(), i);
         i
     }
 }

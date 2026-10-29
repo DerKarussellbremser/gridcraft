@@ -462,6 +462,8 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     }
 }
 
+/// Reads one `<c>` into `sheet` at `pos`: its value or formula and style, its picture, and the
+/// phonetic reading of a shared string whose reading differs from its text's first item.
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
     let style = cx.style(c.attr_u32("s"));
     let v = c.child("v").map(|v| v.text.as_str());

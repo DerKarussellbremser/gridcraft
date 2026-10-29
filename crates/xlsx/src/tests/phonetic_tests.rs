@@ -215,3 +215,23 @@ fn comments_and_inline_strings_still_ignore_phonetic_runs() {
     // Neither path has a shared string table entry to key phonetic data by.
     assert!(wb.phonetics.is_empty());
 }
+
+/// The shared string table finds a text's reading by the reading itself: the same one is the same
+/// item, another one a new item after the text's plain one, one made for other text the plain
+/// item; many readings of one text cost one lookup each, not a scan of the others.
+#[test]
+fn the_shared_string_table_finds_each_reading_at_once() {
+    let reading = |kana: &str| {
+        std::sync::Arc::new(PhoneticString { text: "東".into(), runs: vec![PhoneticRun { start: 0, end: 1, text: kana.into() }], props: None })
+    };
+    let mut sst = crate::write::Sst::default();
+    let higashi = sst.index_reading("東", &reading("ヒガシ"));
+    assert_eq!((sst.index("東"), higashi), (0, 1), "the plain item first");
+    assert_eq!(sst.index_reading("東", &reading("ヒガシ")), higashi);
+    assert_eq!(sst.index_reading("東", &reading("アズマ")), 2);
+    assert_eq!(sst.index_reading("西", &reading("ヒガシ")), 3, "stale: the plain item of the cell's text");
+    // Ten thousand readings of one text, each found again at once.
+    let many: Vec<_> = (0..10_000).map(|i| reading(&format!("ト{i}"))).collect();
+    let first: Vec<u32> = many.iter().map(|r| sst.index_reading("東", r)).collect();
+    assert!(many.iter().zip(&first).all(|(r, i)| sst.index_reading("東", r) == *i));
+}

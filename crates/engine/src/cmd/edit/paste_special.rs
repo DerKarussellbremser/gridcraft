@@ -112,6 +112,9 @@ fn pasted_reading(here: &gridcraft_model::Workbook, p: PastedReading<'_>) -> Opt
     reading.filter(|r| !here.phonetics.iter().any(|x| x.text == text.as_ref() && *x == **r))
 }
 
+/// `edit.pasteSpecial`: the clipboard's cells, or one part of them (values, formulas, formats …),
+/// with an operation, skipping blanks, transposed or as links; a cut moves them, with their
+/// pictures and phonetic readings.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {
