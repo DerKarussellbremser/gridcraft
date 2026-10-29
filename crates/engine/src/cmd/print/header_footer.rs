@@ -228,9 +228,10 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
 }
 
 /// A header or footer section's lines. Excel breaks at a carriage return as at a line feed, so CR
-/// LF is two breaks and a trailing CR lifts the text by an empty line (observed).
+/// LF is two breaks and a trailing CR lifts the text by an empty line (observed). Excel's 255
+/// characters make at most 256 lines: every one is kept, a longer text set by a command is cut.
 pub(super) fn hf_lines(text: &str) -> Vec<&str> {
-    text.split(['\r', '\n']).take(20).collect()
+    text.split(['\r', '\n']).take(256).collect()
 }
 
 pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext) {
