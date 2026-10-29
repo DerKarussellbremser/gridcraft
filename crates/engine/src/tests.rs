@@ -3619,6 +3619,44 @@ fn phonetic_readings_travel_with_their_text() {
     assert!(has(&s, "H1"), "the text stays, its reading too");
 }
 
+/// Filling, sorting and removing duplicates carry a cell's own reading with its text, as they
+/// carry its picture; a series that changes the text leaves the reading behind.
+#[test]
+fn phonetic_readings_travel_with_fill_sort_and_remove_duplicates() {
+    let mut s = s();
+    let reading = |s: &Session, at: &str| s.doc().unwrap().wb.active().unwrap().readings.get(&CellRef::parse(at).unwrap()).map(|r| r.text.clone());
+    let give = |s: &mut Session, at: &str, text: &str| {
+        let own = std::sync::Arc::new(gridcraft_model::PhoneticString { text: text.into(), runs: Vec::new(), props: None });
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().readings.insert(CellRef::parse(at).unwrap(), own);
+    };
+    // Fill down and auto fill copy the text, and so its reading.
+    s.execute("cell.set", json!({"cell": "A1", "input": "東"})).unwrap();
+    give(&mut s, "A1", "東");
+    s.execute("edit.fillDown", json!({"range": "A1:A3"})).unwrap();
+    assert_eq!((reading(&s, "A2"), reading(&s, "A3")), (Some("東".into()), Some("東".into())));
+    s.execute("edit.autoFill", json!({"source": "A1", "target": "A1:D1"})).unwrap();
+    assert_eq!(reading(&s, "D1").as_deref(), Some("東"));
+    // A series makes other text: no reading.
+    s.execute("cell.set", json!({"cell": "F1", "input": "東1"})).unwrap();
+    give(&mut s, "F1", "東1");
+    s.execute("edit.autoFill", json!({"source": "F1", "target": "F1:F3"})).unwrap();
+    assert_eq!((reading(&s, "F1").as_deref(), reading(&s, "F2")), (Some("東1"), None));
+    // Sorting moves the reading with its text.
+    for (at, text) in [("H1", "c"), ("H2", "b"), ("H3", "a")] {
+        s.execute("cell.set", json!({"cell": at, "input": text})).unwrap();
+    }
+    give(&mut s, "H1", "c");
+    s.execute("data.sort", json!({"range": "H1:H3", "header": false, "keys": [{"column": "H"}]})).unwrap();
+    assert_eq!((reading(&s, "H1"), reading(&s, "H3").as_deref()), (None, Some("c")));
+    // Removing a duplicate row moves the rows under it up, readings and all.
+    for (at, text) in [("J1", "x"), ("J2", "x"), ("J3", "y")] {
+        s.execute("cell.set", json!({"cell": at, "input": text})).unwrap();
+    }
+    give(&mut s, "J3", "y");
+    s.execute("data.removeDuplicates", json!({"range": "J1:J3", "header": false})).unwrap();
+    assert_eq!((reading(&s, "J2").as_deref(), reading(&s, "J3")), (Some("y"), None));
+}
+
 #[test]
 fn cell_picture_clipboard_clear_and_structural_edits_keep_complete_payload() {
     let mut s = s();
